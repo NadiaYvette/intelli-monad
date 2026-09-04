@@ -25,6 +25,7 @@ import qualified NegotiateSpec
 import qualified ClientSpec
 import qualified StdioSpec
 import qualified PtySpec
+import qualified LoopbackSpec
 import qualified HttpSpec
 import qualified BridgeSpec
 
@@ -98,6 +99,7 @@ main = hspec $ do
   ClientSpec.spec
   StdioSpec.spec
   PtySpec.spec
+  LoopbackSpec.spec
   HttpSpec.spec
   BridgeSpec.spec
 

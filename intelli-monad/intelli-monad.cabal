@@ -50,6 +50,7 @@ library
                     , IntelliMonad.MCP.Client
                     , IntelliMonad.MCP.Bridge
                     , IntelliMonad.MCP.Global
+                    , IntelliMonad.MCP.Server
                     , IntelliMonad.Prompt
                     , IntelliMonad.Types
                     , IntelliMonad.Tools
@@ -137,6 +138,17 @@ executable calc
     hs-source-dirs:   app
     default-language: Haskell2010
 
+executable mcp-serve
+    import:           warnings
+    main-is:          mcp-serve.hs
+    ghc-options:      -threaded
+    build-depends:
+        base == 4.*,
+        intelli-monad,
+        text
+    hs-source-dirs:   app
+    default-language: Haskell2010
+
 executable auto-talk
     import:           warnings
     main-is:          auto-talk.hs
@@ -166,6 +178,7 @@ test-suite intelli-monad-test
                     , StdioSpec
                     , FakeTransport
                     , BridgeSpec
+                    , LoopbackSpec
                     , PtySpec
                     , HttpSpec
 
