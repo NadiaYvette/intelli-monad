@@ -35,7 +35,10 @@ library
     import:           warnings
 
     -- Modules exported by the library.
-    exposed-modules:  IntelliMonad.Prompt
+    exposed-modules:  IntelliMonad.MCP.Framing
+                    , IntelliMonad.MCP.Correlate
+                    , IntelliMonad.MCP.Negotiate
+                    , IntelliMonad.Prompt
                     , IntelliMonad.Types
                     , IntelliMonad.Tools
                     , IntelliMonad.Tools.Arxiv
@@ -143,6 +146,9 @@ test-suite intelli-monad-test
 
     -- Modules included in this executable, other than Main.
     other-modules:    ArxivSpec
+                    , FramingSpec
+                    , CorrelateSpec
+                    , NegotiateSpec
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -161,7 +167,10 @@ test-suite intelli-monad-test
         base ==4.*,
         intelli-monad,
         hspec >=2.0,
+        hspec-core >=2.0,
+        QuickCheck >=2.13,
         aeson,
+        scientific,
         text,
         bytestring,
         vector,
