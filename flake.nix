@@ -22,6 +22,7 @@
             git
             cabal-install
             zlib
+            zstd
             haskell.compiler.ghc983
           ];
           shellHook = ''

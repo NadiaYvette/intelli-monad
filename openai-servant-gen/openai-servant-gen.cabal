@@ -13,6 +13,8 @@ license:             MIT
 license-file:        LICENSE
 extra-doc-files:     CHANGELOG.md
                      README.md
+extra-source-files:  Setup.hs
+tested-with:        GHC == 9.8.4, GHC == 9.10.3
 
 
 library

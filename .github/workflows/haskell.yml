@@ -11,30 +11,63 @@ permissions:
 
 jobs:
   build:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep in sync with `tested-with:` in the .cabal files and the
+        # README compatibility table. Add a GHC here only after it
+        # builds and tests green locally.
+        ghc: ['9.8.4', '9.10.3']
 
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - uses: haskell-actions/setup@v2
       with:
-        ghc-version: '9.8.4'
-        cabal-version: '3.10'
+        ghc-version: ${{ matrix.ghc }}
+        cabal-version: '3.12'
 
     - name: Cache
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       env:
         cache-name: cache-cabal
       with:
         path: ~/.cabal
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('**/*.cabal') }}-${{ hashFiles('**/cabal.project') }}
+        key: ${{ runner.os }}-ghc-${{ matrix.ghc }}-${{ env.cache-name }}-${{ hashFiles('**/*.cabal') }}-${{ hashFiles('**/cabal.project') }}
         restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-
-          ${{ runner.os }}-build-
+          ${{ runner.os }}-ghc-${{ matrix.ghc }}-${{ env.cache-name }}-
+          ${{ runner.os }}-ghc-${{ matrix.ghc }}-
           ${{ runner.os }}-
+
     - name: Build
       run: |
         cabal update
         cabal build --enable-tests --enable-benchmarks all
     - name: Run tests
+      run: cabal test all
+
+  # Advisory: never gates a merge. Signals breakage coming from new
+  # compilers/dependency releases early so bounds can be adjusted
+  # before they hurt a release.
+  head:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+    - uses: actions/checkout@v4
+    - uses: haskell-actions/setup@v2
+      with:
+        ghc-version: 'latest'
+        cabal-version: 'latest'
+    - name: Cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cabal
+        key: ${{ runner.os }}-head-${{ github.sha }}
+        restore-keys: ${{ runner.os }}-head-
+    - name: Build (advisory)
+      run: |
+        cabal update
+        cabal build --enable-tests --enable-benchmarks all
+    - name: Test (advisory)
       run: cabal test all

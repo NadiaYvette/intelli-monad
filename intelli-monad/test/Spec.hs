@@ -24,6 +24,7 @@ import qualified CorrelateSpec
 import qualified NegotiateSpec
 import qualified ClientSpec
 import qualified StdioSpec
+import qualified PtySpec
 import qualified BridgeSpec
 
 -- Test types for enum (all nullary constructors)
@@ -95,6 +96,7 @@ main = hspec $ do
   NegotiateSpec.spec
   ClientSpec.spec
   StdioSpec.spec
+  PtySpec.spec
   BridgeSpec.spec
 
   describe "JSON Schema Generation for Sum Types" $ do

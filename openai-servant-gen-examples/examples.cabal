@@ -47,6 +47,8 @@ build-type:         Simple
 
 -- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
 extra-doc-files:    CHANGELOG.md
+tested-with:        GHC == 9.8.4, GHC == 9.10.3
+extra-source-files: app/*.hs
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 -- extra-source-files:

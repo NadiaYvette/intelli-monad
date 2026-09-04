@@ -135,10 +135,21 @@ readerLoop s = go newLineAssembler
           mapM_ (handleLine s . lineBytes) events
           go asm'
     -- EOF: a final line without its newline is still a message.
+    -- Pending requests can never be answered once the transport is
+    -- dead, so fail them fast with a synthetic JSON-RPC error —
+    -- callers get `Left` immediately instead of hanging to timeout.
     drainFinal asm = do
       let pending = assemblerPending asm
       unless' (BS.null pending) (handleLine s pending)
+      m <- modifyMVar (sPending s) (\mm -> pure (IM.empty, mm))
+      mapM_ (\cb -> cb deadServerObject) (IM.elems m)
     unless' b a = if b then pure () else a
+
+-- | A synthetic JSON-RPC error response fed to every pending request
+-- when the transport reaches EOF, so 'mcpRequest' fails fast.
+deadServerObject :: A.Object
+deadServerObject =
+  KM.fromList [("error", object ["code" .= (-32000 :: Int), "message" .= ("connection closed by server" :: Text)])]
 
 lineBytes :: AssemblerEvent -> BS.ByteString
 lineBytes (LineComplete l) = l

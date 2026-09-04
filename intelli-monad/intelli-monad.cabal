@@ -9,6 +9,10 @@ license:            MIT
 -- The file containing the license text.
 license-file:       LICENSE
 
+-- GHC versions the package is verified to build with. The test-suite
+-- runs on every GHC listed here in CI; see .github/workflows/haskell.yml.
+tested-with:        GHC == 9.8.4, GHC == 9.10.3
+
 -- The package author(s).
 author:             Junji Hashimoto
 
@@ -24,8 +28,11 @@ build-type:         Simple
 extra-doc-files:    CHANGELOG.md
                     README.md
 
--- Extra source files to be distributed with the package, such as examples, or a tutorial module.
--- extra-source-files:
+-- Examples and app entry points are not built by the library stanza but
+-- are part of the source distribution.
+extra-source-files:
+                    examples/*.hs
+                    app/*.hs
 
 common warnings
     ghc-options: -Wall
@@ -157,6 +164,7 @@ test-suite intelli-monad-test
                     , StdioSpec
                     , FakeTransport
                     , BridgeSpec
+                    , PtySpec
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -186,3 +194,5 @@ test-suite intelli-monad-test
         time,
         stm,
         directory
+      , temporary
+      , filepath
