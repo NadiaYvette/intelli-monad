@@ -30,6 +30,8 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import Data.Void
 import GHC.IO.Exception
+import IntelliMonad.MCP.Bridge (mcpToolName, parseMcpToolName, registeredTools)
+import IntelliMonad.MCP.Global
 import IntelliMonad.Persist
 import IntelliMonad.Prompt hiding (user, system, assistant)
 import IntelliMonad.Types
@@ -58,6 +60,16 @@ parseRepl =
     <|> (try (lexm (string ":show") >> lexm (string "session")) >> pure ShowSession)
     <|> (try (lexm (string ":set" ) >> lexm (string "timeout") >> L.decimal) >>= pure . SetTimeout)
     <|> (try (lexm (string ":read") >> lexm (string "image") >> lexm imagePath) >>= pure . ReadImage . T.pack)
+    <|> ( try
+            ( lexm (string ":mcp") >> lexm (string "add") >> do
+                sid <- T.pack <$> lexm mcpNameChunk
+                prog <- T.pack <$> lexm mcpNameChunk
+                rest <- T.strip <$> getInput
+                return $ McpAdd sid prog (filter (not . T.null) (T.splitOn " " rest))
+            )
+        )
+    <|> (try (lexm (string ":mcp") >> lexm (string "list")) >> pure McpList)
+    <|> (try (lexm (string ":mcp") >> lexm (string "remove") >> lexm mcpNameChunk) >>= pure . McpRemove . T.pack)
     <|> (try (lexm (string ":list") >> lexm (string "sessions")) >> pure ListSessions)
     <|> (try (lexm (string ":list")) >> pure ListSessions)
     <|> ( try
@@ -81,6 +93,7 @@ parseRepl =
     sessionName = many alphaNumChar
     imagePath = many (alphaNumChar <|> char '.' <|> char '/' <|> char '-')
     modelName = many (alphaNumChar <|> char '-' <|> char '.' <|> char ':' <|> char '/')
+    mcpNameChunk = many (alphaNumChar <|> char '.' <|> char '/' <|> char '-' <|> char '_' <|> char ':')
 
 getTextInputLine :: (MonadTrans t) => t (InputT IO) (Maybe T.Text)
 getTextInputLine = fmap (fmap T.pack) (lift $ getInputLine "% ")
@@ -230,6 +243,28 @@ runCmd' cmd ret = do
     Right (ReadImage imagePath) -> do
       callWithImage @p imagePath >>= showContents
       repl
+    Right (McpAdd sid prog args) -> do
+      r <- liftIO $ mcpAddServer sid (T.unpack prog) (map T.unpack args)
+      liftIO $ case r of
+        Left err -> T.putStrLn $ ":mcp add failed: " <> err
+        Right names -> do
+          T.putStrLn $ "Connected " <> sid <> " (" <> T.pack (show (length names)) <> " tools)"
+          forM_ names (T.putStrLn . ("  " <>))
+      repl
+    Right McpList -> do
+      servers <- liftIO mcpListServers
+      liftIO $ if null servers
+        then putStrLn "No MCP servers connected. Use :mcp add <id> <program> [args...]"
+        else forM_ servers $ \(sid, n) -> do
+          T.putStrLn $ sid <> ": " <> T.pack (show n) <> " tools"
+          names <- mcpServerToolNames sid
+          forM_ names (T.putStrLn . ("  " <>))
+      repl
+    Right (McpRemove sid) -> do
+      removed <- liftIO $ mcpRemoveServer sid
+      liftIO $ T.putStrLn $
+        if removed then "Disconnected " <> sid else "No such server: " <> sid
+      repl
     Right Help -> do
       liftIO $ do
         putStrLn ":quit"
@@ -243,6 +278,9 @@ runCmd' cmd ret = do
         putStrLn ":copy session <from> <to>"
         putStrLn ":delete session <session name>"
         putStrLn ":switch session <session name>"
+        putStrLn ":mcp add <server-id> <program> [args...]"
+        putStrLn ":mcp list"
+        putStrLn ":mcp remove <server-id>"
         putStrLn ":help"
       repl
     Right (UserInput input) -> do

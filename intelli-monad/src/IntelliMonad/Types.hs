@@ -617,6 +617,15 @@ data ReplCommand
       { sessionName :: Text
       }
   | ReadImage Text
+  | McpAdd
+      { mcpServerId :: Text,
+        mcpProgram :: Text,
+        mcpArgs :: [Text]
+      }
+  | McpList
+  | McpRemove
+      { mcpServerId :: Text
+      }
   | UserInput Text
   | Help
   | Repl

@@ -41,6 +41,7 @@ library
                     , IntelliMonad.MCP.Transport
                     , IntelliMonad.MCP.Client
                     , IntelliMonad.MCP.Bridge
+                    , IntelliMonad.MCP.Global
                     , IntelliMonad.Prompt
                     , IntelliMonad.Types
                     , IntelliMonad.Tools

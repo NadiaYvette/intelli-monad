@@ -52,6 +52,8 @@ import Data.Time
 import IntelliMonad.Config (readConfig)
 import qualified IntelliMonad.Config as Config
 import IntelliMonad.CustomInstructions
+import IntelliMonad.MCP.Bridge (registeredTools, toLouterTool)
+import IntelliMonad.MCP.Global (globalMcpRegistry)
 import IntelliMonad.Persist
 import IntelliMonad.Tools
 import IntelliMonad.Types
@@ -141,15 +143,22 @@ call = loop []
       -- Check if streaming is enabled
       let streaming = Config.getUseStreaming config
 
+      -- Augment the outgoing request with tools discovered from
+      -- connected MCP servers. Derived per call from the context
+      -- request (never stored back), so tools stay fresh and never
+      -- accumulate; an empty registry is a no-op.
+      mcpTools <- liftIO (registeredTools globalMcpRegistry)
+      let reqWithMcp = fromTools prev.contextRequest (map toLouterTool mcpTools)
+
       ((contents, finishReason), res) <- if streaming
         then do
           -- Use streaming with incremental output
-          liftIO $ runRequestStreaming prev.contextSessionName prev.contextRequest env.timeoutSeconds
+          liftIO $ runRequestStreaming prev.contextSessionName reqWithMcp env.timeoutSeconds
             (prev.contextHeader <> prev.contextBody <> prev.contextFooter)
             (\chunk -> T.putStr chunk >> IO.hFlush IO.stdout)  -- Stream to stdout
         else do
           -- Use non-streaming
-          liftIO $ runRequest prev.contextSessionName prev.contextRequest env.timeoutSeconds
+          liftIO $ runRequest prev.contextSessionName reqWithMcp env.timeoutSeconds
             (prev.contextHeader <> prev.contextBody <> prev.contextFooter)
 
       let current_total_tokens = 0 -- fromMaybe 0 $ API.completionUsageTotalUnderscoretokens <$> API.createChatCompletionResponseUsage res
@@ -206,7 +215,8 @@ initializePrompt tools customs sessionName req = do
               tools = tools,
               customInstructions = customs,
               backend = (PersistProxy (config @p)),
-              hooks = []
+              hooks = [],
+              timeoutSeconds = Nothing
             }
       Nothing -> do
         time <- liftIO getCurrentTime
@@ -226,7 +236,8 @@ initializePrompt tools customs sessionName req = do
                   tools = tools,
                   customInstructions = customs,
                   backend = (PersistProxy (config @p)),
-                  hooks = []
+                  hooks = [],
+                  timeoutSeconds = Nothing
                 }
         initialize @p conn (init'.context)
         return init'

@@ -29,6 +29,8 @@ import Data.Proxy
 import Data.Text (Text)
 import qualified Data.Text.Encoding as T
 import Data.Time
+import IntelliMonad.MCP.Bridge (execMcpTool, parseMcpToolName, toolResultText)
+import IntelliMonad.MCP.Global (globalMcpRegistry)
 import IntelliMonad.Types
 
 toolExec' ::
@@ -66,10 +68,31 @@ toolExec' sessionName id' name' args' = do
     Nothing -> tool1 sessionName id' name' args'
 
 mergeToolCall :: forall p m. (PersistentBackend p, MonadIO m, MonadFail m) => [ToolProxy] -> Text -> Text -> Text -> Text -> Prompt m (Maybe Content)
-mergeToolCall [] _ _ _ _ = return Nothing
+mergeToolCall [] sessionName id' name' args' = mcpFallbackTool sessionName id' name' args'
 mergeToolCall (tool : tools') sessionName id' name' args' = do
   case tool of
     (ToolProxy (_ :: Proxy a)) -> (toolExec' @a @p <||> mergeToolCall @p tools') sessionName id' name' args'
+
+-- | Last link in the tool chain: when no compile-time ToolProxy
+-- matched, route an @mcp__<server>__<tool>@ call to its MCP server
+-- over the global registry. Non-MCP names propagate Nothing unchanged
+-- (the historical behavior for unknown tools).
+mcpFallbackTool ::
+  (MonadIO m, MonadFail m) =>
+  Text -> Text -> Text -> Text -> Prompt m (Maybe Content)
+mcpFallbackTool sessionName id' name' args'
+  | Just _ <- parseMcpToolName name' = do
+      let argObj = case A.eitherDecode (BS.fromStrict (T.encodeUtf8 args')) of
+            Right (A.Object o) -> o
+            _ -> mempty
+      result <- liftIO $ execMcpTool globalMcpRegistry name' argObj
+      time <- liftIO getCurrentTime
+      return $ Just $ case result of
+        Right v ->
+          Content Tool (ToolReturn id' name' (toolResultText v)) sessionName time
+        Left err ->
+          Content Tool (ToolReturn id' name' ("MCP error: " <> err)) sessionName time
+  | otherwise = return Nothing
 
 hasToolCall :: Contents -> Bool
 hasToolCall cs =
