@@ -46,6 +46,7 @@ library
                     , IntelliMonad.MCP.Correlate
                     , IntelliMonad.MCP.Negotiate
                     , IntelliMonad.MCP.Transport
+                    , IntelliMonad.MCP.Transport.HTTP
                     , IntelliMonad.MCP.Client
                     , IntelliMonad.MCP.Bridge
                     , IntelliMonad.MCP.Global
@@ -103,6 +104,7 @@ library
                     , stm >=2.5 && <2.6
                     , kan-extensions >=5.2 && <5.3
                     , http-types >=0.12 && <1.0
+                    , case-insensitive >=1.2 && <1.7
     -- Directories containing source files.
     hs-source-dirs:   src
 
@@ -165,6 +167,7 @@ test-suite intelli-monad-test
                     , FakeTransport
                     , BridgeSpec
                     , PtySpec
+                    , HttpSpec
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -196,3 +199,6 @@ test-suite intelli-monad-test
         directory
       , temporary
       , filepath
+      , process
+      , network
+      , http-client
