@@ -24,6 +24,7 @@ import qualified CorrelateSpec
 import qualified NegotiateSpec
 import qualified ClientSpec
 import qualified StdioSpec
+import qualified BridgeSpec
 
 -- Test types for enum (all nullary constructors)
 data Color = Red | Green | Blue
@@ -94,6 +95,7 @@ main = hspec $ do
   NegotiateSpec.spec
   ClientSpec.spec
   StdioSpec.spec
+  BridgeSpec.spec
 
   describe "JSON Schema Generation for Sum Types" $ do
 

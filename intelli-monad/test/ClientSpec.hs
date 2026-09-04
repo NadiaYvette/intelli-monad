@@ -83,17 +83,35 @@ spec = do
         d2 <- newEmptyMVar
         _ <- forkIO (putMVar d1 =<< mcpRequest s "a" Nothing 5000)
         _ <- forkIO (putMVar d2 =<< mcpRequest s "b" Nothing 5000)
-        r1 <- nextJSON fs
-        r2 <- nextJSON fs
-        KM.lookup "id" (asObj r1) `shouldBe` Just (A.Number 1)
-        KM.lookup "id" (asObj r2) `shouldBe` Just (A.Number 2)
-        -- Reply to the second request first.
-        serverReplyResult fs (A.Number 2) (A.String "second")
-        serverReplyResult fs (A.Number 1) (A.String "first")
+        -- Which requester wins id 1 vs id 2 is a race between forks;
+        -- read both frames and reply to whichever id carried method
+        -- "b" FIRST, so responses deliberately arrive out of order.
+        ra <- nextJSON fs
+        rb <- nextJSON fs
+        let idOf m = case KM.lookup "id" (asObj m) of
+              Just n -> n
+              _ -> error "frame has no id"
+            methOf m = case KM.lookup "method" (asObj m) of
+              Just (A.String t) -> t
+              _ -> ""
+            idA = idOf ra
+            idB = idOf rb
+        methOf ra `shouldSatisfy` (\t -> t == "a" || t == "b")
+        methOf rb `shouldSatisfy` (\t -> t == "a" || t == "b")
+        serverReplyResult fs idB (A.String "second")
+        serverReplyResult fs idA (A.String "first")
         got1 <- takeBounded d1
         got2 <- takeBounded d2
-        got1 `shouldBe` Right (A.String "first")
-        got2 `shouldBe` Right (A.String "second")
+        -- The requester for "a" must receive "first" and the one for
+        -- "b" "second", regardless of which response hit the wire
+        -- first — the whole point of correlated slots.
+        case methOf ra of
+          "a" -> do
+            got1 `shouldBe` Right (A.String "first")
+            got2 `shouldBe` Right (A.String "second")
+          _ -> do
+            got1 `shouldBe` Right (A.String "second")
+            got2 `shouldBe` Right (A.String "first")
 
     it "times out a request that gets no response" $
       withFake $ \_ s -> do

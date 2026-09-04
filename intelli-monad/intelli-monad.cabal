@@ -40,6 +40,7 @@ library
                     , IntelliMonad.MCP.Negotiate
                     , IntelliMonad.MCP.Transport
                     , IntelliMonad.MCP.Client
+                    , IntelliMonad.MCP.Bridge
                     , IntelliMonad.Prompt
                     , IntelliMonad.Types
                     , IntelliMonad.Tools
@@ -154,6 +155,7 @@ test-suite intelli-monad-test
                     , ClientSpec
                     , StdioSpec
                     , FakeTransport
+                    , BridgeSpec
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:

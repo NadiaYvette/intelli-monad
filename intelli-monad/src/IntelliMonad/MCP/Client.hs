@@ -237,8 +237,22 @@ mcpRequest s meth mparams timeoutMs = do
 extractResult :: A.Object -> Either Text A.Value
 extractResult o =
   case KM.lookup "error" o of
-    Just err -> Left ("server error: " <> T.pack (show err))
+    Just err -> Left (describeError err)
     Nothing -> Right (maybe A.Null id (KM.lookup "result" o))
+  where
+    -- Render as `server error [code]: message` when the error object
+    -- has the JSON-RPC shape; fall back to showing the raw value.
+    describeError (A.Object eo) =
+      let code = case KM.lookup "code" eo of
+            Just nc -> case A.fromJSON nc of
+              A.Success (i :: Int) -> T.pack (show i)
+              A.Error _ -> "?"
+            _ -> "?"
+          msg = case KM.lookup "message" eo of
+            Just (A.String m) -> m
+            _ -> T.pack (show eo)
+      in "server error [" <> code <> "]: " <> msg
+    describeError other = "server error: " <> T.pack (show other)
 
 -- | Send a notification (no id, no reply, no slot).
 mcpNotify :: Session -> Text -> Maybe A.Object -> IO (Either Text ())
