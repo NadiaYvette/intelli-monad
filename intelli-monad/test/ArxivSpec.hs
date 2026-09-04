@@ -7,6 +7,7 @@ import IntelliMonad.Tools.Arxiv
 import IntelliMonad.Types
 import IntelliMonad.Prompt
 import IntelliMonad.Persist
+import System.Environment (lookupEnv)
 import Test.Hspec
 
 spec :: Spec
@@ -26,8 +27,14 @@ spec = do
           _ -> expectationFailure "Expected Object' schema"
 
     describe "Real API Request" $ do
+      -- Live-network tests: run only when INTELLI_MONAD_LIVE_TESTS=1,
+      -- so the default suite stays fast and deterministic (a hung
+      -- network call once stalled the whole suite for 300s).
       it "makes successful request to Arxiv API and retrieves papers" $ do
-        -- Create Arxiv query
+        live <- lookupEnv "INTELLI_MONAD_LIVE_TESTS"
+        case live of
+          Nothing -> pendingWith "set INTELLI_MONAD_LIVE_TESTS=1 to run live-network tests"
+          Just _ -> pure ()
         let arxivQuery = Arxiv
               { searchQuery = "quantum computing"
               , maxResults = Just 3
@@ -52,6 +59,10 @@ spec = do
           [] -> expectationFailure "No papers returned"
 
       it "handles different search queries" $ do
+        live <- lookupEnv "INTELLI_MONAD_LIVE_TESTS"
+        case live of
+          Nothing -> pendingWith "set INTELLI_MONAD_LIVE_TESTS=1 to run live-network tests"
+          Just _ -> pure ()
         let arxivQuery = Arxiv
               { searchQuery = "neural networks"
               , maxResults = Just 2
