@@ -33,6 +33,7 @@ module IntelliMonad.MCP.Correlate
     -- * Matching
   , MatchResult(..)
   , takeMatching
+  , responseKey
     -- * Introspection
   , pendingIds
   , numPending
@@ -96,9 +97,12 @@ register (Correlator m) method =
 
 -- | A classified inbound message.
 data Inbound
-  = InboundResponse Int A.Object
-      -- ^ A response to one of our requests. The 'Int' is the matched id;
-      -- the object is the full message for result/error extraction.
+  = InboundResponse A.Value A.Object
+      -- ^ A response to one of our requests. The 'A.Value' is the raw
+      -- JSON-RPC id, exactly as the peer wrote it (number or string —
+      -- both legal; our own ids are numbers, server-initiated ids may
+      -- not be). The object is the full message for result/error
+      -- extraction.
   | InboundRequest Text A.Object
       -- ^ A peer-initiated request (method + full message). The caller
       -- must eventually reply.
@@ -120,13 +124,14 @@ classify v = case v of
     , hasResultOrError o ->
         Malformed "method and result/error co-occur"
     -- A response: has an id, and result or error, and no method.
-    | Just mid <- lookupIntId o
+    | Just rid <- KM.lookup "id" o
     , Nothing <- KM.lookup "method" o
     , hasResultOrError o ->
-        InboundResponse mid o
-    -- A peer request: method + id.
+        InboundResponse rid o
+    -- A peer request: method + id (any id shape — server-initiated
+    -- requests legally use string ids).
     | Just meth <- methodOf o
-    , Just _ <- lookupIntId o ->
+    , Just _ <- KM.lookup "id" o ->
         InboundRequest meth o
     -- A notification: method, no id.
     | Just meth <- methodOf o
@@ -147,17 +152,6 @@ classify v = case v of
       -- co-occurrence, so key membership is the correct discriminator.
       KM.member "result" o || KM.member "error" o
 
-    -- JSON-RPC 2.0 ids: number or string. MCP clients use numbers.
-    -- String ids are classified as malformed-with-reason upstream rather
-    -- than silently unmatched, so the caller can log them.
-    lookupIntId o =
-      case KM.lookup "id" o of
-        Just nv@A.Number {} ->
-          case A.fromJSON nv of
-            A.Success i -> Just (i :: Int)
-            A.Error _ -> Nothing
-        _ -> Nothing
-
 --------------------------------------------------------------------------------
 -- Matching
 --------------------------------------------------------------------------------
@@ -175,11 +169,22 @@ data MatchResult
 
 -- | Try to match a response-shaped message against open slots.
 takeMatching :: Correlator -> Inbound -> MatchResult
-takeMatching corr (InboundResponse mid o) =
-  case IM.lookup mid (slots corr) of
-    Just _ -> Matched o (Correlator (IM.delete mid (slots corr)))
-    Nothing -> NotMine corr
+takeMatching corr (InboundResponse rid o) =
+  case responseKey rid of
+    Just mid | IM.member mid (slots corr) ->
+      Matched o (Correlator (IM.delete mid (slots corr)))
+    _ -> NotMine corr
 takeMatching corr _ = NotAResponse corr
+
+-- | Project a wire id onto the correlator's integer key space. Number
+-- ids decode to the key; string ids (legal for server-initiated
+-- requests) can never collide with our allocated numbers and map to
+-- Nothing, reporting NotMine instead of crashing.
+responseKey :: A.Value -> Maybe Int
+responseKey (A.Number n) = case A.fromJSON (A.Number n) of
+  A.Success i -> Just (i :: Int)
+  A.Error _ -> Nothing
+responseKey _ = Nothing
 
 --------------------------------------------------------------------------------
 -- Introspection

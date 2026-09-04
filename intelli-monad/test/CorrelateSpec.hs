@@ -8,7 +8,6 @@ import Test.QuickCheck (Arbitrary (..), Gen, elements, listOf, choose)
 import qualified Data.Aeson as A
 import Data.Aeson (Value, object, (.=))
 import qualified Data.Text as T
-
 import IntelliMonad.MCP.Correlate
 
 -- | Classify-input messages are JSON objects; the constructors carry the
@@ -30,16 +29,22 @@ spec = do
   describe "classify" $ do
     it "classifies a success response by id key even when result is null" $ do
       let msg = object ["jsonrpc" .= ("2.0" :: T.Text), "id" .= (7 :: Int), "result" .= A.Null]
-      classify msg `shouldBe` InboundResponse 7 (asObj msg)
+      classify msg `shouldBe` InboundResponse (A.toJSON (7 :: Int)) (asObj msg)
 
     it "classifies an error response" $ do
       let err = object [("code" .= (-32601 :: Int)), ("message" .= ("nope" :: T.Text))]
           msg = object ["jsonrpc" .= ("2.0" :: T.Text), "id" .= (3 :: Int), "error" .= err]
-      classify msg `shouldBe` InboundResponse 3 (asObj msg)
+      classify msg `shouldBe` InboundResponse (A.toJSON (3 :: Int)) (asObj msg)
 
     it "classifies a peer request (method + id)" $ do
       let msg = object ["jsonrpc" .= ("2.0" :: T.Text), "id" .= (9 :: Int), "method" .= ("sampling/createMessage" :: T.Text), "params" .= object []]
       classify msg `shouldBe` InboundRequest "sampling/createMessage" (asObj msg)
+
+    it "classifies a server-initiated request with a string id as a request" $ do
+      -- Server->client request ids may legally be strings (JSON-RPC);
+      -- they can never collide with our numeric slots.
+      let msg = object ["jsonrpc" .= ("2.0" :: T.Text), "id" .= ("srv-1" :: T.Text), "method" .= ("roots/list" :: T.Text)]
+      classify msg `shouldBe` InboundRequest "roots/list" (asObj msg)
 
     it "classifies a notification (method, no id)" $ do
       let msg = object ["jsonrpc" .= ("2.0" :: T.Text), "method" .= ("notifications/initialized" :: T.Text)]
@@ -47,11 +52,13 @@ spec = do
         InboundNotification m _ -> m `shouldBe` "notifications/initialized"
         other -> expectationFailure ("wrong classification: " <> show other)
 
-    it "marks a response-shaped message with a string id as malformed" $ do
+    it "treats a response-shaped message with a string id as a response (never matching our numeric slots)" $ do
+      -- Legal for server-initiated traffic; here it simply cannot match
+      -- one of our allocated numeric ids and reports NotMine at match
+      -- time rather than being dropped as malformed.
       let msg = object ["jsonrpc" .= ("2.0" :: T.Text), "id" .= ("abc" :: T.Text), "result" .= A.Null]
-      case classify msg of
-        Malformed _ -> pure ()
-        other -> expectationFailure ("wrong classification: " <> show other)
+      classify msg `shouldBe` InboundResponse (A.toJSON ("abc" :: T.Text)) (asObj msg)
+      takeMatching newCorrelator (classify msg) `shouldBe` NotMine newCorrelator
 
     it "marks a non-object as malformed" $ do
       classify (A.Number 1) `shouldBe` Malformed "not an object"
@@ -71,6 +78,10 @@ spec = do
           do o `shouldBe` asObj msg
              numPending c2 `shouldBe` 0
         other -> expectationFailure ("no match: " <> show other)
+
+    it "reports a response with a non-numeric id as NotMine" $ do
+      let msg = object ["id" .= ("stray" :: T.Text), "result" .= A.Null]
+      takeMatching newCorrelator (classify msg) `shouldBe` NotMine newCorrelator
 
     it "reports a response to an unknown id as NotMine, keeping state" $ do
       let msg = object ["id" .= (99 :: Int), "result" .= A.Null]

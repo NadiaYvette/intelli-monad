@@ -22,6 +22,8 @@ import qualified ArxivSpec
 import qualified FramingSpec
 import qualified CorrelateSpec
 import qualified NegotiateSpec
+import qualified ClientSpec
+import qualified StdioSpec
 
 -- Test types for enum (all nullary constructors)
 data Color = Red | Green | Blue
@@ -90,6 +92,8 @@ main = hspec $ do
   FramingSpec.spec
   CorrelateSpec.spec
   NegotiateSpec.spec
+  ClientSpec.spec
+  StdioSpec.spec
 
   describe "JSON Schema Generation for Sum Types" $ do
 

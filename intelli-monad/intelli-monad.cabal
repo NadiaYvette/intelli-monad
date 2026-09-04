@@ -38,6 +38,8 @@ library
     exposed-modules:  IntelliMonad.MCP.Framing
                     , IntelliMonad.MCP.Correlate
                     , IntelliMonad.MCP.Negotiate
+                    , IntelliMonad.MCP.Transport
+                    , IntelliMonad.MCP.Client
                     , IntelliMonad.Prompt
                     , IntelliMonad.Types
                     , IntelliMonad.Tools
@@ -149,6 +151,9 @@ test-suite intelli-monad-test
                     , FramingSpec
                     , CorrelateSpec
                     , NegotiateSpec
+                    , ClientSpec
+                    , StdioSpec
+                    , FakeTransport
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -175,4 +180,6 @@ test-suite intelli-monad-test
         bytestring,
         vector,
         transformers,
-        time
+        time,
+        stm,
+        directory
