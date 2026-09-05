@@ -34,6 +34,7 @@ import IntelliMonad.Types
 import System.Process
 import Data.Proxy
 
+-- | Tool: fetch a key's value.
 data GetKey = GetKey
   { key :: Text
   }
@@ -44,6 +45,7 @@ instance HasFunctionObject GetKey where
   getFunctionDescription = "Get a key from the key-value store"
   getFieldDescription "key" = "The key to get"
 
+-- | Tool: set a key's value (namespaced by session).
 data SetKey = SetKey
   { key :: Text,
     value :: Text
@@ -56,6 +58,7 @@ instance HasFunctionObject SetKey where
   getFieldDescription "key" = "The key to set"
   getFieldDescription "value" = "The value to set"
 
+-- | Tool: delete a key (namespaced by session).
 data DeleteKey = DeleteKey
   { key :: Text
   }
@@ -66,6 +69,7 @@ instance HasFunctionObject DeleteKey where
   getFunctionDescription = "Delete a key from the key-value store"
   getFieldDescription "key" = "The key to delete"
 
+-- | Tool: list every key in the session namespace.
 data ListKeys = ListKeys ()
   deriving (Eq, Show, Generic, JSONSchema, A.FromJSON, A.ToJSON)
 

@@ -69,6 +69,7 @@ data StdIOConfig = StdIOConfig
   , sioCwd :: Maybe FilePath
   }
 
+-- | A stdio config with no args, no env override, no cwd change.
 defaultStdIOConfig :: FilePath -> StdIOConfig
 defaultStdIOConfig prog = StdIOConfig prog [] Nothing Nothing
 

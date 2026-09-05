@@ -80,6 +80,8 @@ newCorrelator = Correlator IM.empty
 newtype RequestHandle = RequestHandle Int
   deriving (Eq, Ord, Show)
 
+-- | The integer id behind a 'RequestHandle' — for tests and logs;
+-- the correlator API itself is opaque.
 handleId :: RequestHandle -> Int
 handleId (RequestHandle i) = i
 
@@ -156,6 +158,7 @@ classify v = case v of
 -- Matching
 --------------------------------------------------------------------------------
 
+-- | Outcome of 'takeMatching'.
 data MatchResult
   = Matched A.Object Correlator
       -- ^ The response object and the correlator with the slot removed.
@@ -190,8 +193,10 @@ responseKey _ = Nothing
 -- Introspection
 --------------------------------------------------------------------------------
 
+-- | Ids with open slots, ascending — for shutdown diagnostics.
 pendingIds :: Correlator -> [Int]
 pendingIds = IM.keys . slots
 
+-- | Number of requests awaiting a response.
 numPending :: Correlator -> Int
 numPending = IM.size . slots

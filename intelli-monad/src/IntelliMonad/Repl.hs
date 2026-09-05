@@ -46,8 +46,11 @@ import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer as L
 import IntelliMonad.Config
 
+-- | Megaparsec parser type over 'Text' input.
 type Parser = Parsec Void Text
 
+-- | Parser for @:@-prefixed REPL commands (":quit", ":mcp add", ...).
+-- Anything without a colon prefix is ordinary user input.
 parseRepl :: Parser ReplCommand
 parseRepl =
   (try (lexm (string ":quit")) >> pure Quit)
@@ -95,9 +98,13 @@ parseRepl =
     modelName = many (alphaNumChar <|> char '-' <|> char '.' <|> char ':' <|> char '/')
     mcpNameChunk = many (alphaNumChar <|> char '.' <|> char '/' <|> char '-' <|> char '_' <|> char ':')
 
+-- | Read one input line in any monad transformer over 'InputT IO'.
 getTextInputLine :: (MonadTrans t) => t (InputT IO) (Maybe T.Text)
 getTextInputLine = fmap (fmap T.pack) (lift $ getInputLine "% ")
 
+-- | Read and parse the next user line: 'Nothing' (EOF) maps to
+-- 'Quit', @:@-prefixed lines go through 'parseRepl', everything else
+-- is 'UserInput'.
 getUserCommand :: forall p t. (PersistentBackend p, MonadTrans t) => t (InputT IO) (Either (ParseErrorBundle Text Void) ReplCommand)
 getUserCommand = do
   minput <- getTextInputLine
@@ -110,6 +117,8 @@ getUserCommand = do
           Left err -> return $ Left err
         else return $ Right (UserInput input)
 
+-- | Open @$EDITOR@ on a temp file; 'Just' the edited text if the
+-- editor succeeded and the result still parses as YAML text.
 editWithEditor :: forall m. (MonadIO m, MonadFail m) => m (Maybe T.Text)
 editWithEditor = do
   liftIO $ withSystemTempFile "tempfile.txt" $ \filePath fileHandle -> do
@@ -123,6 +132,7 @@ editWithEditor = do
       ExitSuccess -> Just <$> T.readFile filePath
       ExitFailure _ -> return Nothing
 
+-- | Edit a 'Louter.ChatRequest' through @$EDITOR@ (YAML round-trip).
 editRequestWithEditor :: forall m. (MonadIO m, MonadFail m) => Louter.ChatRequest -> m (Maybe Louter.ChatRequest)
 editRequestWithEditor req = do
   liftIO $ withSystemTempFile "tempfile.yaml" $ \filePath fileHandle -> do
@@ -143,6 +153,7 @@ editRequestWithEditor req = do
             return Nothing
       ExitFailure _ -> return Nothing
 
+-- | Edit a 'Contents' payload through @$EDITOR@ (YAML round-trip).
 editContentsWithEditor :: forall m. (MonadIO m, MonadFail m) => Contents -> m (Maybe Contents)
 editContentsWithEditor contents = do
   liftIO $ withSystemTempFile "tempfile.yaml" $ \filePath fileHandle -> do
@@ -163,6 +174,8 @@ editContentsWithEditor contents = do
             return Nothing
       ExitFailure _ -> return Nothing
 
+-- | Execute one REPL command, then continue with @repl@ (the loop
+-- continuation passed by the previous iteration).
 runCmd' :: forall p. (PersistentBackend p) => Either (ParseErrorBundle Text Void) ReplCommand -> Maybe (Prompt (InputT IO) ()) -> Prompt (InputT IO) ()
 runCmd' cmd ret = do
   let repl = case ret of
@@ -370,11 +383,13 @@ runCmd' cmd ret = do
       withDB @p $ \conn -> deleteKey @p conn (KeyName namespace' keyName)
       repl
 
+-- | One iteration of the REPL loop; recurses through 'runCmd''.
 runRepl' :: forall p. (PersistentBackend p) => Prompt (InputT IO) ()
 runRepl' = do
   cmd <- getUserCommand @p
   runCmd' @p cmd (Just (runRepl' @p))
 
+-- | REPL entry point: initialize the session, run 'runRepl''.
 runRepl :: forall p. (PersistentBackend p) => [ToolProxy] -> [CustomInstructionProxy] -> Text -> Louter.ChatRequest -> Contents -> IO ()
 runRepl tools customs sessionName defaultReq contents = do
   config <- readConfig

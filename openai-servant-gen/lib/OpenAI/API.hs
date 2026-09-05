@@ -15,7 +15,7 @@
 {-# LANGUAGE MultiParamTypeClasses      #-}
 
 {-# OPTIONS_GHC
--fno-warn-unused-binds -fno-warn-unused-imports -freduction-depth=328 #-}
+-fno-warn-unused-binds -fno-warn-unused-imports -fno-warn-orphans -freduction-depth=328 #-}
 
 module OpenAI.API
   ( -- * Client and Server

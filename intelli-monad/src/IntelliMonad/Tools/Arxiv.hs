@@ -65,6 +65,8 @@ import Network.HTTP.Simple (setRequestQueryString)
 import Text.XML
 import Text.XML.Cursor (Axis, Cursor, attributeIs, checkName, content, element, fromDocument, ($//), (&/), (&//))
 
+-- | The arXiv search tool: queries the arXiv Atom API and returns
+-- parsed entries as tool output.
 data Arxiv = Arxiv
   { searchQuery :: Text,
     maxResults :: Maybe Int,
@@ -79,6 +81,7 @@ instance HasFunctionObject Arxiv where
   getFieldDescription "maxResults" = "The maximum number of results to return. If not specified, the default is 10."
   getFieldDescription "start" = "The start index of the results. If not specified, the default is 0."
 
+-- | Raw HTTP GET of the arXiv Atom feed for the query.
 arxivSearch :: Arxiv -> IO ByteString
 arxivSearch Arxiv {..} = do
   manager <- newManager tlsManagerSettings
@@ -92,14 +95,17 @@ arxivSearch Arxiv {..} = do
   response <- httpLbs request manager
   return $ toStrict $ responseBody response
 
+-- | Name-local element axis (@xml-conduits @checkName@ is global).
 element' :: Text -> Axis
 element' name = checkName (\n -> nameLocalName n == name)
 
+-- | Search and parse in one step.
 queryArxiv :: Arxiv -> IO [ArxivEntry]
 queryArxiv keyword = do
   jsonSource <- arxivSearch keyword :: IO ByteString
   return $ parseArxivXML jsonSource
 
+-- | One arXiv Atom @<entry>@: id, publication date, title, abstract.
 data ArxivEntry = ArxivEntry
   { arxivId :: Text,
     published :: Text,
@@ -108,6 +114,7 @@ data ArxivEntry = ArxivEntry
   }
   deriving (Eq, Show, Generic, A.FromJSON, A.ToJSON)
 
+-- | 'head' with a default for the empty list.
 headDef :: a -> [a] -> a
 headDef d [] = d
 headDef _ (x : _) = x
@@ -125,6 +132,8 @@ parseEntry c =
 parseArxivResult :: Cursor -> [ArxivEntry]
 parseArxivResult c = mapMaybe parseEntry (c $// element' "entry")
 
+-- | Parse a full arXiv Atom response body into entries (safe default
+-- on malformed fields).
 parseArxivXML :: ByteString -> [ArxivEntry]
 parseArxivXML xml =
   case parseText def (TL.fromStrict $ T.decodeUtf8 xml) of

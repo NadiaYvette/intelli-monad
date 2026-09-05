@@ -64,9 +64,11 @@ import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.Environment (getEnv, lookupEnv)
 import qualified System.IO as IO
 
+-- | The current prompt context (header, body, footer, request).
 getContext :: (MonadIO m, MonadFail m) => Prompt m Context
 getContext = context <$> get
 
+-- | Replace the current context and persist it via the backend.
 setContext :: forall p m. (MonadIO m, MonadFail m, PersistentBackend p) => Context -> Prompt m ()
 setContext context = do
   env <- get
@@ -74,9 +76,11 @@ setContext context = do
   _ <- withDB @p $ \conn -> save @p (conn :: Conn p) context
   return ()
 
+-- | The session name of the current context.
 getSessionName :: (MonadIO m, MonadFail m) => Prompt m Text
 getSessionName = contextSessionName <$> getContext
 
+-- | Append contents to the context body and rebuild the request.
 push :: forall p m. (MonadIO m, MonadFail m, PersistentBackend p) => Contents -> Prompt m ()
 push contents = do
   prev <- getContext
@@ -189,6 +193,7 @@ call = loop []
       v <- call @p
       return $ ret <> retTool <> v
 
+-- | Send a user text turn and run the tool loop until a final answer.
 callWithText :: forall p m. (MonadIO m, MonadFail m, PersistentBackend p) => Text -> Prompt m Contents
 callWithText input = do
   time <- liftIO getCurrentTime
@@ -197,11 +202,15 @@ callWithText input = do
   push @p contents
   call @p
 
+-- | Like 'callWithText' but the caller builds the 'Contents' (any mix
+-- of messages, images, tool returns).
 callWithContents :: forall p m. (MonadIO m, MonadFail m, PersistentBackend p) => Contents -> Prompt m Contents
 callWithContents input = do
   push @p input
   call @p
 
+-- | Load or create the session context, then produce the 'PromptEnv'
+-- for a run.
 initializePrompt :: forall p m. (MonadIO m, MonadFail m, PersistentBackend p) => [ToolProxy] -> [CustomInstructionProxy] -> Text -> Louter.ChatRequest -> m PromptEnv
 initializePrompt tools customs sessionName req = do
 --  config <- readConfig
@@ -242,11 +251,13 @@ initializePrompt tools customs sessionName req = do
         initialize @p conn (init'.context)
         return init'
 
+-- | Initialize the session and run a prompt action against it.
 runPrompt :: forall p m a. (MonadIO m, MonadFail m, PersistentBackend p) => [ToolProxy] -> [CustomInstructionProxy] -> Text -> Louter.ChatRequest -> Prompt m a -> m a
 runPrompt tools customs sessionName req func = do
   context <- initializePrompt @p tools customs sessionName req
   fst <$> runStateT func context
 
+-- | Pretty-print contents to stdout as @role: text@ lines.
 showContents :: (MonadIO m) => Contents -> m ()
 showContents res = do
   forM_ res $ \(Content user message _ _) ->
@@ -260,11 +271,14 @@ showContents res = do
             c@(ToolCall _ _ _) -> T.pack $ show c
             c@(ToolReturn _ _ _) -> T.pack $ show c
 
+-- | Drop every body message, keeping header and footer.
 clear :: forall p m. (MonadIO m, MonadFail m, PersistentBackend p) => Prompt m ()
 clear = do
   prev <- getContext
   setContext @p $ prev {contextBody = []}
 
+-- | Base64-encode an image file (png/jpg by suffix) and send it as a
+-- user turn.
 callWithImage :: forall p m. (MonadIO m, MonadFail m, PersistentBackend p) => Text -> Prompt m Contents
 callWithImage imagePath = do
   let tryReadFile = T.decodeUtf8Lenient . Base64.encode <$> BS.readFile (T.unpack imagePath)
@@ -283,6 +297,8 @@ callWithImage imagePath = do
 
 -- Only called by calc example.
 
+-- | A 'User'-role text content with default metadata (helper for
+-- 'generate').
 user :: Text -> Content
 user input = Content User (Message input) "default" defaultUTCTime
 
@@ -302,6 +318,8 @@ generate ::
     HasFunctionObject output,
     JSONSchema output
   ) => Contents -> input -> m (Maybe output)
+-- | Structured extraction: run a one-off prompt whose answer must
+-- decode as @output@ (the schema is described to the model first).
 generate userContext input = do
   let valid = ToolProxy (Proxy :: Proxy output)
       req = (fromModel "gpt-4")
@@ -340,6 +358,8 @@ runPromptWithValidation ::
   Louter.ChatRequest ->
   Text ->
   m (Maybe validation)
+-- | Run a prompt whose answer is forced through a validating tool
+-- call (the 'validation' type's tool).
 runPromptWithValidation tools customs sessionName req input = do
   let valid = ToolProxy (Proxy :: Proxy validation)
   runPrompt @p (valid : tools) customs sessionName req (callWithText @p input >>= callWithValidation @validation @p)

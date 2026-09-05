@@ -91,6 +91,7 @@ newtype LineAssembler = LineAssembler ByteString
 assemblerPending :: LineAssembler -> ByteString
 assemblerPending (LineAssembler b) = b
 
+-- | An assembler holding no partial line — the initial state.
 newLineAssembler :: LineAssembler
 newLineAssembler = LineAssembler BS.empty
 

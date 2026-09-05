@@ -71,12 +71,14 @@ import qualified Data.Text.IO as T
 import System.Environment (lookupEnv)
 import Data.Aeson.Encode.Pretty (encodePretty)
 
+-- | Conversation roles on the wire.
 data User = User | System | Assistant | Tool deriving (Eq, Show, Ord, Generic)
 
 instance ToJSON User
 
 instance FromJSON User
 
+-- | Round-trip a 'User' role through its wire string.
 userToText :: User -> Text
 userToText = \case
   User -> "user"
@@ -84,6 +86,7 @@ userToText = \case
   Assistant -> "assistant"
   Tool -> "tool"
 
+-- | Parse a wire role string; 'error' on an unknown role.
 textToUser :: Text -> User
 textToUser = \case
   "user" -> User
@@ -95,6 +98,8 @@ textToUser = \case
 instance Show (P.Image P.PixelRGB8) where
   show _ = "Image: ..."
 
+-- | One conversational message: plain text, an image (base64), a
+-- tool invocation, or a tool result.
 data Message
   = Message
       {unText :: Text}
@@ -114,6 +119,8 @@ data Message
       }
   deriving (Eq, Show, Ord, Generic)
 
+-- | Why generation ended. @ToolCalls@/@FunctionCall@ mean the model
+-- wants a tool executed before the next turn.
 data FinishReason
   = Stop
   | Length
@@ -123,6 +130,7 @@ data FinishReason
   | Null
   deriving (Eq, Show)
 
+-- | Wire spelling of a 'FinishReason'.
 finishReasonToText :: FinishReason -> Text
 finishReasonToText = \case
   Stop -> "stop"
@@ -132,6 +140,7 @@ finishReasonToText = \case
   ContentFilter -> "content_filter"
   Null -> "null"
 
+-- | Inverse of 'finishReasonToText'; total over the known strings.
 textToFinishReason :: Text -> FinishReason
 textToFinishReason = \case
   "stop" -> Stop
@@ -146,8 +155,11 @@ instance ToJSON Message
 
 instance FromJSON Message
 
+-- | Newtype wrapper for a model name.
 newtype Model = Model Text deriving (Eq, Show)
 
+-- | Tool metadata: the function-calling name, the description shown to
+-- the model, and per-field documentation for the input schema.
 class HasFunctionObject r where
   getFunctionName :: String
   getFunctionDescription :: String
@@ -160,6 +172,8 @@ data ConstructorSchema = ConstructorSchema
   , csIsNullary :: Bool      -- ^ True for zero-field constructors
   } deriving (Show, Eq)
 
+-- | A JSON-schema-ish description used to render tool input schemas
+-- (and to describe inputs to 'IntelliMonad.Prompt.generate').
 data Schema
   = Maybe' Schema
   | String'
@@ -175,21 +189,29 @@ data Schema
   | OneOfTagged [ConstructorSchema]    -- ^ Tagged union with @tag/@value
   deriving (Show, Eq)
 
+-- | Generic bridge: from a @GHC.Generics@ representation to a
+-- 'Schema'.
 class GSchema s f where
   gschema :: forall a. f a -> Schema
 
+-- | Types that can describe their own tool-input 'Schema'; derived
+-- generically by default.
 class JSONSchema r where
   schema :: Schema
   default schema :: (HasFunctionObject r, Generic r, GSchema r (Rep r)) => Schema
   schema = gschema @r (from (undefined :: r))
 
+-- | Backend-independent request/response codec: add a message to a
+-- request, and pull the reply plus its 'FinishReason' back out.
 class ChatCompletion b where
   toRequest :: Louter.ChatRequest -> b -> Louter.ChatRequest
   fromResponse :: Text -> Louter.ChatResponse -> (b, FinishReason)
 
+-- | Encode a JSON-able value into a persistent 'PersistValue'.
 toPV :: (ToJSON a) => a -> PersistValue
 toPV = toPersistValue . toStrict . encode
 
+-- | Decode a 'PersistValue' back through JSON; 'Left' on mismatch.
 fromPV :: (FromJSON a) => PersistValue -> Either Text a
 fromPV json = do
   json' <- fmap fromStrict $ fromPersistValue json
@@ -271,6 +293,9 @@ instance Ord Context where
             (contextHeader c2, contextBody c2, contextFooter c2,
              contextTotalTokens c2, contextSessionName c2, contextCreated c2)
 
+-- | Existential wrapper letting heterogeneous tools share one list:
+-- each @t@ carries its own 'Tool' instance, schema, and codec. The
+-- REPL exposes these; @mcp-serve@ serves them.
 data ToolProxy = forall t. (Tool t, A.FromJSON t, A.ToJSON t, A.FromJSON (Output t), A.ToJSON (Output t), HasFunctionObject t, JSONSchema t) => ToolProxy (Proxy t)
 
 class CustomInstruction a where

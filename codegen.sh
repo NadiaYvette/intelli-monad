@@ -16,5 +16,12 @@ sed -i \
 
 sed -i -e 's/CreateTranscriptionRequestModel/String/g' openai-servant-gen/lib/OpenAI/API.hs
 
+# The generated AuthClientData type-family instance is necessarily an
+# orphan (servant's client pattern); silence the -Worphans noise in
+# every regen.
+sed -i \
+    -e 's/-fno-warn-unused-imports -freduction-depth/-fno-warn-unused-imports -fno-warn-orphans -freduction-depth/' \
+    openai-servant-gen/lib/OpenAI/API.hs
+
 curl https://www.stackage.org/lts-22.12/cabal.config |\
 sed -e 's/with-compiler: .*$//g'  > cabal.project.freeze

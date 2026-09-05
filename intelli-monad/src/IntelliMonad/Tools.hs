@@ -31,10 +31,13 @@ import IntelliMonad.Tools.Bash
 import IntelliMonad.Tools.Utils
 import IntelliMonad.Types
 
+-- | The arXiv search tool (see "IntelliMonad.Tools.Arxiv").
 arxiv = ToolProxy (Proxy :: Proxy Arxiv)
 
+-- | The shell-command tool (see "IntelliMonad.Tools.Bash").
 bash = ToolProxy (Proxy :: Proxy Bash)
 
+-- | The default toolchain the REPL exposes and @mcp-serve@ serves.
 defaultTools :: [ToolProxy]
 defaultTools =
   [ bash,

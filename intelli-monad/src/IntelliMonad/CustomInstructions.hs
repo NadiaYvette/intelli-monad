@@ -25,9 +25,11 @@ import Data.Proxy
 import GHC.Generics
 import IntelliMonad.Types
 
+-- | No custom instructions by default.
 defaultCustomInstructions :: [CustomInstructionProxy]
 defaultCustomInstructions = []
 
+-- | Sample tool: echoes a number back (exercises the tool loop).
 data ValidateNumber = ValidateNumber
   { number :: Double
   }
@@ -48,30 +50,36 @@ instance Tool ValidateNumber where
   toolExec _ = do
     return $ ValidateNumberOutput 0 "" ""
 
+-- | Sample custom instruction: prompts the model to compute an
+-- answer and call the 'ValidateNumber' tool with it.
 data Math = Math
 
 instance CustomInstruction Math where
   customHeader _ = [(Content System (Message "Calcurate user input, then output just the number. Then call 'output_number' function.") "" defaultUTCTime)]
   customFooter _ = []
 
+-- | Gather the 'customHeader' contents of every custom instruction.
 headers :: [CustomInstructionProxy] -> Contents
 headers [] = []
 headers (tool : tools') =
   case tool of
     (CustomInstructionProxy a) -> customHeader a <> headers tools'
 
+-- | Gather the 'customFooter' contents of every custom instruction.
 footers :: [CustomInstructionProxy] -> Contents
 footers [] = []
 footers (tool : tools') =
   case tool of
     (CustomInstructionProxy a) -> customFooter a <> footers tools'
 
+-- | Gather the 'toolHeader' contents of every tool.
 toolHeaders :: [ToolProxy] -> Contents
 toolHeaders [] = []
 toolHeaders (tool : tools') =
   case tool of
     (ToolProxy (_ :: Proxy a)) -> toolHeader @a <> toolHeaders tools'
 
+-- | Gather the 'toolFooter' contents of every tool.
 toolFooters :: [ToolProxy] -> Contents
 toolFooters [] = []
 toolFooters (tool : tools') =

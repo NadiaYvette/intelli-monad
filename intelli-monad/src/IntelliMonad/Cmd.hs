@@ -48,6 +48,8 @@ import Text.Megaparsec.Char.Lexer as L
 -- Our request contains the target server, and model type.
 import Louter.Types.Request (ChatRequest)
 
+-- | optparse-applicative parser for the CLI subcommands (mirrors the
+-- REPL's @:@ commands).
 opts :: Options.Applicative.Parser ReplCommand
 opts =
   subparser
@@ -76,6 +78,7 @@ opts =
         <> command "help" (info (pure Help) (progDesc "Show the help"))
     )
 
+-- | Execute a CLI command against the @default@ session.
 runCmd :: forall p. (PersistentBackend p) => ChatRequest -> ReplCommand -> IO ()
 runCmd request cmd = do
   config <- readConfig
@@ -91,6 +94,8 @@ runCmd request cmd = do
     )
     (runPrompt @p [] customs sessionName request (runCmd' @p (Right cmd) Nothing))
 
+-- | CLI entry point: read config, pick the model (env @OPENAI_MODEL@
+-- overrides), dispatch to 'runCmd'.
 main :: IO ()
 main = do
   -- Parse our config file. We only use the model, at this point.

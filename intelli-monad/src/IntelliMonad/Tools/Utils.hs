@@ -33,6 +33,8 @@ import IntelliMonad.MCP.Bridge (execMcpTool, parseMcpToolName, toolResultText)
 import IntelliMonad.MCP.Global (globalMcpRegistry)
 import IntelliMonad.Types
 
+-- | Execute one tool dispatch step at a concrete type @t@; 'Nothing'
+-- when the name doesn't match or the arguments fail to decode.
 toolExec' ::
   forall t p m.
   (PersistentBackend p, MonadIO m, MonadFail m, Tool t, A.FromJSON t, A.ToJSON (Output t)) =>
@@ -51,6 +53,7 @@ toolExec' sessionName id' name' args' = do
         return $ Just $ (Content Tool (ToolReturn id' name' (T.decodeUtf8Lenient (BS.toStrict (encode output)))) sessionName time)
     else return Nothing
 
+-- | Choice combinator for dispatch steps: the first 'Just' wins.
 (<||>) ::
   forall m.
   (MonadIO m, MonadFail m) =>
@@ -67,6 +70,8 @@ toolExec' sessionName id' name' args' = do
     Just v -> return (Just v)
     Nothing -> tool1 sessionName id' name' args'
 
+-- | Dispatch one tool invocation across the toolchain, falling back
+-- to the MCP bridge when no static tool claims the name.
 mergeToolCall :: forall p m. (PersistentBackend p, MonadIO m, MonadFail m) => [ToolProxy] -> Text -> Text -> Text -> Text -> Prompt m (Maybe Content)
 mergeToolCall [] sessionName id' name' args' = mcpFallbackTool sessionName id' name' args'
 mergeToolCall (tool : tools') sessionName id' name' args' = do
@@ -94,6 +99,7 @@ mcpFallbackTool sessionName id' name' args'
           Content Tool (ToolReturn id' name' ("MCP error: " <> err)) sessionName time
   | otherwise = return Nothing
 
+-- | Does any content carry a tool invocation?
 hasToolCall :: Contents -> Bool
 hasToolCall cs =
   let loop [] = False
@@ -101,6 +107,7 @@ hasToolCall cs =
       loop (_ : cs') = loop cs'
    in loop cs
 
+-- | Keep only the tool-invocation contents, in order.
 filterToolCall :: Contents -> Contents
 filterToolCall cs =
   let loop [] = []
@@ -108,12 +115,15 @@ filterToolCall cs =
       loop (_ : cs') = loop cs'
    in loop cs
 
+-- | Run every tool invocation in the contents through
+-- 'mergeToolCall', returning the tool-return contents.
 tryToolExec :: forall p m. (PersistentBackend p, MonadIO m, MonadFail m) => [ToolProxy] -> Text -> Contents -> Prompt m Contents
 tryToolExec tools sessionName contents = do
   cs <- forM (filterToolCall contents) $ \(Content _ (ToolCall id' name' args') _ _) -> do
     mergeToolCall @p tools sessionName id' name' args'
   return $ catMaybes cs
 
+-- | Find the first content invoking this tool.
 findToolCall :: ToolProxy -> Contents -> Maybe Content
 findToolCall _ [] = Nothing
 findToolCall t@(ToolProxy (Proxy :: Proxy a)) (c : cs) =

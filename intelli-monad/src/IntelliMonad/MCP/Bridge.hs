@@ -164,6 +164,7 @@ data McpToolRegistry = McpToolRegistry
   , mrTools :: IORef (M.Map Text McpToolHandle) -- ^ Keyed by encoded name.
   }
 
+-- | An empty registry.
 newMcpToolRegistry :: IO McpToolRegistry
 newMcpToolRegistry = do
   ss <- newMVar M.empty

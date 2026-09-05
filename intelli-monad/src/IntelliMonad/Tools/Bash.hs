@@ -27,6 +27,8 @@ import GHC.IO.Exception
 import IntelliMonad.Types
 import System.Process
 
+-- | The shell tool: runs a bash script locally and returns exit
+-- code, stdout, and stderr.
 data Bash = Bash
   { script :: String
   }

@@ -67,6 +67,8 @@ data ServeConfig = ServeConfig
   -- ^ Print the caution banner on startup (upstream convention).
   }
 
+-- | A serve config exposing no tools under the @mcp-serve@ session
+-- name, with the startup banner enabled.
 defaultServeConfig :: ServeConfig
 defaultServeConfig =
   ServeConfig

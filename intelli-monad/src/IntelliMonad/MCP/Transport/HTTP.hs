@@ -87,6 +87,8 @@ data HttpTransportConfig = HttpTransportConfig
     htcStreamRetryMs :: Int
   }
 
+-- | Defaults: no extra headers, 30 s HTTP timeout, 500 ms stream
+-- retry delay.
 defaultHttpTransportConfig :: Text -> HttpTransportConfig
 defaultHttpTransportConfig url =
   HttpTransportConfig

@@ -34,6 +34,8 @@ import Database.Persist.Sqlite hiding (get)
 import IntelliMonad.Types
 import Control.Monad.Trans.State (get)
 
+-- | A backend with no storage: every operation is a no-op. Used by
+-- @mcp-serve@ (the server owns the session) and for tests.
 data StatelessConf = StatelessConf
 
 instance PersistentBackend SqliteConf where
@@ -105,12 +107,15 @@ instance PersistentBackend StatelessConf where
   setKey _ _ _ = return ()
   deleteKey _ _ = return ()
 
+-- | Run an action with a freshly set-up connection pool.
 withDB :: forall p m a. (MonadIO m, MonadFail m, PersistentBackend p) => (Conn p -> m a) -> m a
 withDB func =
   setup (config @p) >>= \case
     Nothing -> fail "Can not open a database."
     Just (conn :: Conn p) -> func conn
 
+-- | Extract the backend from the prompt environment and run a
+-- backend-polymorphic action against it.
 withBackend :: forall a m. (MonadIO m, MonadFail m) => (forall p. PersistentBackend p => p -> Prompt m a) -> Prompt m a
 withBackend func = do
   (env :: PromptEnv) <- get

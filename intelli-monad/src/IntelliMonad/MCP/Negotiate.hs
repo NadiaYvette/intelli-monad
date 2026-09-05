@@ -40,6 +40,8 @@ data Revision
   | R2026_07_28 -- ^ Stateless revision.
   deriving (Eq, Ord, Show, Enum, Bounded)
 
+-- | Render a revision as its wire string (the @protocolVersion@
+-- value on the "2025-03-26" layout and later).
 revisionString :: Revision -> Text
 revisionString r = case r of
   R2024_11_05 -> "2024-11-05"
@@ -48,9 +50,13 @@ revisionString r = case r of
   R2025_11_25 -> "2025-11-25"
   R2026_07_28 -> "2026-07-28"
 
+-- | Parse a wire protocol-version string back to a 'Revision'
+-- (leading/trailing whitespace tolerated).
 parseRevision :: Text -> Maybe Revision
 parseRevision t = find ((== T.strip t) . revisionString) allRevisions
 
+-- | Every revision the client knows, oldest first. 'clientSupports'
+-- gates against this list.
 allRevisions :: [Revision]
 allRevisions = [minBound .. maxBound]
 
