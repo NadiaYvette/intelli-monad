@@ -162,11 +162,35 @@ httpPost h v = do
     Left (e :: SomeException) -> logHttp ("POST failed: " <> T.pack (show e))
     Right resp -> do
       captureSessionId h resp
-      let body = responseBody resp
-      when (statusCode (responseStatus resp) == 200) $
-        if isSseBody resp
-          then mapM_ (feedInbox h) (sseDataPayloads body)
-          else feedInbox h body
+      case statusCode (responseStatus resp) of
+        200 ->
+          let body = responseBody resp
+           in if isSseBody resp
+                then mapM_ (feedInbox h) (sseDataPayloads body)
+                else feedInbox h body
+        -- 202 Accepted: response is deferred (GET stream or silence).
+        202 -> pure ()
+        -- Definitive HTTP-level rejection (401 bad JWT, 404 wrong
+        -- endpoint, 5xx): fail the pending request NOW with a
+        -- synthetic JSON-RPC error instead of letting it hang until
+        -- its timeout. The id comes from the request we just sent.
+        code ->
+          case v of
+            A.Object o | Just rid <- KM.lookup "id" o ->
+              feedInbox h $
+                A.encode $
+                  A.object
+                    [ "jsonrpc" A..= ("2.0" :: Text),
+                      "id" A..= rid,
+                      "error"
+                        A..= A.object
+                          [ "code" A..= (-32000 :: Int),
+                            "message"
+                              A..= ("HTTP transport error: server answered "
+                                      <> T.pack (show code))
+                          ]
+                    ]
+            _ -> logHttp ("POST got HTTP " <> T.pack (show code) <> " for a notification")
 
 logHttp :: Text -> IO ()
 logHttp t = BC.hPutStrLn System.IO.stderr ("[mcp-http] " <> T.encodeUtf8 t)
