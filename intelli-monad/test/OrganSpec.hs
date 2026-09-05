@@ -256,8 +256,17 @@ spec = do
     it "renders a fn headline" $
       typeHeadline (fnTy ["int"] "pure" "int") `shouldBe` "(std/int) -> {std/pure} std/int"
 
-    it "classifies identical types" $
-      brVerdict (sameArgs (fnTy ["int"] "pure" "int") (fnTy ["int"] "pure" "int")) `shouldBe` "identical"
+    it "classifies identical types (descriptive, no languages)" $
+      brVerdict (sameArgsNoLang (fnTy ["int"] "pure" "int") (fnTy ["int"] "pure" "int")) `shouldBe` "identical"
+
+    it "refuses identical JSON across different languages (the dictionary's whole point)" $ do
+      -- Identical *renderings* in two languages are precisely the
+      -- C-int-vs-Rust-i64 illusion: the verdict must fall to the
+      -- dictionary, which has no axiom for the fixture's synthetic
+      -- std/int qname, and fail closed.
+      let r = sameArgs (fnTy ["int"] "pure" "int") (fnTy ["int"] "pure" "int")
+      brVerdict r `shouldBe` "unlicensed-boundary"
+      any ("outside the dictionary" `T.isInfixOf`) (brDetail r) `shouldBe` True
 
     it "classifies an effect-row mismatch" $ do
       let r = sameArgs (fnTy ["int"] "pure" "int") (fnTy ["int"] "io" "int")
@@ -300,4 +309,6 @@ spec = do
       ls `shouldNotContain` [("Empty [c]" :: Text)]
   where
     sameArgs ta tb =
-      boundaryReport (OrganCheckBoundary "Factorial" "factorial" (Just "haskell") "factorial_rs" "factorial" (Just "rust")) ta (typeHeadline ta) tb (typeHeadline tb)
+      boundaryReport (OrganCheckBoundary "Factorial" "factorial" (Just "haskell") "factorial_rs" "factorial" (Just "rust")) (Just "haskell") ta (typeHeadline ta) (Just "rust") tb (typeHeadline tb)
+    sameArgsNoLang ta tb =
+      boundaryReport (OrganCheckBoundary "Factorial" "factorial" (Just "haskell") "factorial_rs" "factorial" (Just "rust")) Nothing ta (typeHeadline ta) Nothing tb (typeHeadline tb)

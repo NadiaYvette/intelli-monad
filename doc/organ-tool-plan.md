@@ -235,3 +235,32 @@ Design decisions locked by evidence:
    (`organ_ingest`), two artifact kinds.
 3. Severity mapping is lossless only for stderr; structured warnings
    survive because the envelope carries them even on success.
+
+## Phase C prelude — the representation dictionary (2026-09-06, LANDED)
+
+`IntelliMonad.Tools.OrganBank.Dictionary` is the "write down the
+representation dictionary" step from the original Phase C sketch,
+implemented as a pure, tested module:
+
+- Per-(language, qname) axiom table with citations; widths in bits;
+  implementation-defined precisions honestly `Nothing` (SML, Mercury).
+- `license` verdicts: licensed-lossless / licensed-widening /
+  licensed-with-runtime-checks / unlicensed-{narrowing,overflow-domain,
+  family,range} — fail-closed on unknown qnames.
+- Signed/unsigned are one integer family with a signedness constraint
+  (the tests caught the first draft treating them as different
+  families and misreporting `unlicensed-family`).
+- `organ_check_boundary` now licenses direction-aware: arguments flow
+  caller→callee, the result flows callee→caller, so Haskell Int# →
+  C int32 refuses on the *argument* (64→32) while the return would
+  have been fine — the aggregate is the weakest link.
+- Structural impossibilities (arity/effect) outrank licensing; the
+  zip-truncation hazard in argument comparison is guarded by that
+  ordering.
+- 13 new DictionarySpec tests + 2 reworked OrganSpec tests; suite
+  139 examples, 0 failures on 9.8.4; live-verified over the MCP wire
+  against the 25-language spec-example corpus.
+
+The transplant milestones this unblocks are planned in
+`doc/phase-c-transplant.md` (C1 stubs → C2 one real pair → C3 Koka
+effects → C4 per-boundary PMWA-shaped claims).

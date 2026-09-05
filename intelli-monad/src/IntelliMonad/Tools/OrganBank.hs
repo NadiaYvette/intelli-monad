@@ -26,11 +26,16 @@
 -- variable (default @~\/.organ\/organ-index.db@). Ingestion input
 -- defaults to the @ORGAN_BANK_DIR@ environment variable.
 --
--- Soundness note: boundary reports here are /descriptive/ — they
+-- Soundness note: boundary reports are descriptive by default — they
 -- compare the two sides' 'Ty' and 'EffectRow' JSON and classify
--- differences in prose. They are not a cross-language typechecker; the
--- mismatch log they produce is intended as the corpus for one (see
--- @Dokumente\/intelli-monad\/organ-tool-plan.md@, Phase C).
+-- differences in prose. When both sides' languages have entries in the
+-- representation dictionary ("IntelliMonad.Tools.OrganBank.Dictionary")
+-- the verdict is strengthened: every argument and the (direction-aware)
+-- result are checked against the per-language axioms, and a crossing
+-- the axioms cannot license is reported @unlicensed-boundary@. That is
+-- still not a cross-language typechecker — it is an auditable axiom
+-- table plus fail-closed aggregation (see doc/organ-tool-plan.md,
+-- Phase C).
 module IntelliMonad.Tools.OrganBank
   ( OrganRepoMap (..)
   , OrganFindSymbol (..)
@@ -59,7 +64,7 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy as BL
 import Data.List (sort)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TEnc
@@ -68,6 +73,7 @@ import Database.Persist.Sqlite (PersistValue (..))
 import Database.Sqlite
 import GHC.Generics (Generic)
 import IntelliMonad.Types
+import qualified IntelliMonad.Tools.OrganBank.Dictionary as D
 import System.Directory
 import System.Environment (lookupEnv)
 import System.FilePath (takeExtension, (</>))
@@ -693,8 +699,8 @@ instance Tool OrganCheckBoundary where
       Left problem ->
         return $ OrganCheckBoundaryOut
           (OrganCheckBoundaryOutput (BoundaryReport "" "" Nothing Nothing "not resolvable" [problem]))
-      Right ((ta, ea), (tb, eb)) ->
-        return $ OrganCheckBoundaryOut (OrganCheckBoundaryOutput (boundaryReport args ta ea tb eb))
+      Right ((ta, ea, la), (tb, eb, lb)) ->
+        return $ OrganCheckBoundaryOut (OrganCheckBoundaryOutput (boundaryReport args (Just la) ta ea (Just lb) tb eb))
     where
       fetchOne conn m n mlang = do
         let sql = case mlang of
@@ -705,9 +711,9 @@ instance Tool OrganCheckBoundary where
           (\r -> return (pvText (r !! 0), pvText (r !! 1), pvText (r !! 2)))
         return $ case rows of
           [] -> Left "Symbol not in the index; run organ_ingest first or check spelling."
-          [(tj, h, _)] ->
+          [(tj, h, l)] ->
             case A.decode (BL.fromStrict (TEnc.encodeUtf8 tj)) of
-              Just v -> Right (v, h)
+              Just v -> Right (v, h, l)
               Nothing -> Left "Stored type JSON failed to re-decode (index corruption?)."
           multiple ->
             Left
@@ -719,12 +725,33 @@ instance Tool OrganCheckBoundary where
               )
 
 -- | Compare two verbatim type JSONs and classify the differences.
-boundaryReport :: OrganCheckBoundary -> A.Value -> Text -> A.Value -> Text -> BoundaryReport
-boundaryReport args ta ha tb hb =
+-- The @Maybe Text@ language arguments license the dictionary layer:
+-- when both languages are known (and both sides are function types),
+-- every argument and the result are checked against the representation
+-- dictionary ('IntelliMonad.Tools.OrganBank.Dictionary') and the
+-- verdict is strengthened — or to @unlicensed-boundary@ when an axiom
+-- refutes the crossing. Positions without axioms fail closed.
+--
+-- Direction matters: argument values flow caller→callee, so each
+-- argument position licenses /caller into callee/; the result value
+-- flows callee→caller, so the result position licenses /callee into
+-- caller/. A C @int32@ ↔ Rust @i64@ pair is licensed-widening on the
+-- argument and unlicensed-narrowing on the return — the weakest link
+-- wins.
+boundaryReport ::
+  OrganCheckBoundary ->
+  Maybe Text ->
+  A.Value ->
+  Text ->
+  Maybe Text ->
+  A.Value ->
+  Text ->
+  BoundaryReport
+boundaryReport args mlangA ta ha mlangB tb hb =
   let fnA = fnOf ta
       fnB = fnOf tb
       arity (Just (A.Object o)) = case KM.lookup "args" o of
-        Just (A.Array as) -> Just (length as)
+        Just (A.Array as) -> Just (length (arrToList as))
         _ -> Just 0
       arity _ = Nothing
       arA = arity fnA
@@ -733,9 +760,61 @@ boundaryReport args ta ha tb hb =
       effB = effectNames fnB
       effDiff = if effA == effB then Nothing else Just (effA, effB)
       bothFn = maybe False (const True) fnA && maybe False (const True) fnB
+      argsOf mfn = case mfn of
+        Just (A.Object o) -> case KM.lookup "args" o of
+          Just (A.Array as) -> [t | A.Object a <- arrToList as, Just t <- [KM.lookup "type" a]]
+          _ -> []
+        _ -> []
+      resOf mfn = case mfn of
+        Just (A.Object o) -> KM.lookup "result" o
+        _ -> Nothing
+      -- tyHeadName unwraps the OrganIR tagged shapes ({con: {qname:
+      -- ...}}, {var: ...}, {app: ...}); qnameToText alone would see only
+      -- the outer tag and render "/".
+      memberFor lang t =
+        let r = tyHeadName t
+            (m, n) = T.breakOnEnd "/" r
+        in if T.null r || T.null m then Nothing else D.memberOf lang (T.dropEnd 1 m) n
+      unknownSide mlang t mm =
+        mlang <> ":" <> tyHeadName t
+          <> (case mm of Just _ -> " (known)"; Nothing -> " (outside the dictionary)")
+      licenseDir mlangFrom tFrom mlangTo tTo = case (mlangFrom, mlangTo) of
+        (Just lf, Just lt) -> case (memberFor lf tFrom, memberFor lt tTo) of
+          (Just mf, Just mt) -> D.license mf mt
+          _ ->
+            ( "unlicensed-unproven",
+              ["no axiom for " <> unknownSide lf tFrom (memberFor lf tFrom) <> " vs " <> unknownSide lt tTo (memberFor lt tTo)]
+            )
+        _ -> ("unlicensed-unproven", ["language of one side unknown; the dictionary was not consulted"])
+      posReports =
+        [ ("arg " <> T.pack (show i), v, ax)
+        | (i, (x, y)) <- zip [1 :: Int ..] (zip (argsOf fnA) (argsOf fnB)),
+          (v, ax) <- [licenseDir mlangA x mlangB y]
+        ]
+      resReports = case (resOf fnA, resOf fnB) of
+        -- The return value flows callee → caller.
+        (Just x, Just y) -> [("result", v, ax) | (v, ax) <- [licenseDir mlangB y mlangA x]]
+        _ -> []
+      -- The dictionary judges a genuine crossing only: different,
+      -- known languages, both function-shaped. A same-language
+      -- comparison has no representation boundary, and non-function
+      -- shapes have no positions to license.
+      crossLang = bothFn && isJust mlangA && isJust mlangB && mlangA /= mlangB
+      posAll = if crossLang then posReports <> resReports else []
+      licVerdict = if crossLang then D.aggregate [v | (_, v, _) <- posAll] else Nothing
+      overallLine v
+        | v == "licensed-lossless" = "every value provably round-trips across this crossing"
+        | v == "licensed-widening" = "the callee's representation contains the caller's range (widening); a stub must convert explicitly"
+        | v == "licensed-with-runtime-checks" = "one side is dynamic; a generated stub must check values at the crossing"
+        | otherwise = "the crossing is not licensed (" <> v <> "); a stub generator must refuse"
+      licDetails =
+        concat [ (label <> ": " <> v) : ax | (label, v, ax) <- posAll ]
+          <> case licVerdict of
+            Just v -> ["Representation dictionary: " <> overallLine v <> "."]
+            Nothing -> []
       details =
         concat
-          [ maybe [] (\(x, y) -> ["Arity differs: " <> x <> " vs " <> y <> "."]) (mkPair arA arB),
+          [ if arA /= arB then maybe [] (\(x, y) -> ["Arity differs: " <> x <> " vs " <> y <> "."]) (mkPair arA arB) else [],
             if bothFn && effA /= effB
               then
                 [ "Effect rows differ: caller side is {" <> effA <> "}, callee side is {" <> effB <> "}.",
@@ -745,11 +824,18 @@ boundaryReport args ta ha tb hb =
             if not (isJust fnA) || not (isJust fnB)
               then ["One side is not a function type; the boundary shapes are not comparable."]
               else [],
-            if ta == tb then ["Types are structurally identical."] else ["Type JSONs differ; both sides are stored verbatim in the index (ty_json) for a future checker to unify."]
+            if ta == tb then ["Types are structurally identical."] else ["Type JSONs differ; both sides are stored verbatim in the index (ty_json) for a future checker to unify."],
+            licDetails
           ]
       verdict
-        | ta == tb = "identical"
+        -- Structural impossibilities outrank licensing: an arity or
+        -- effect mismatch makes the call impossible whatever the
+        -- representations allow (and zip-truncation would otherwise
+        -- license a wrong-arity pair).
         | bothFn && (arA /= arB || effA /= effB) = "mismatch"
+        | Just v <- licVerdict, "unlicensed" `T.isPrefixOf` v = "unlicensed-boundary"
+        | ta == tb = "identical"
+        | Just v <- licVerdict = v
         | otherwise = "differs-in-shape"
    in BoundaryReport
         { brA = args.ocbModuleA <> "/" <> args.ocbNameA <> " : " <> ha,
@@ -766,6 +852,8 @@ boundaryReport args ta ha tb hb =
         A.Object b | Just body <- KM.lookup "body" b -> fnOf body
         _ -> Nothing
       _ -> Nothing
+    arrToList :: A.Array -> [A.Value]
+    arrToList = foldr (:) []
     effectNames mfn = case mfn of
       Just (A.Object o) -> maybe "" effectRowText (KM.lookup "effect" o)
       _ -> ""
