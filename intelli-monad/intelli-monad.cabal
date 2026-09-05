@@ -33,6 +33,7 @@ extra-doc-files:    CHANGELOG.md
 extra-source-files:
                     examples/*.hs
                     app/*.hs
+                    bash_completion.d/intelli-monad
 
 common warnings
     ghc-options: -Wall
@@ -42,7 +43,8 @@ library
     import:           warnings
 
     -- Modules exported by the library.
-    exposed-modules:  IntelliMonad.MCP.Framing
+    exposed-modules:  IntelliMonad.MCP
+                    , IntelliMonad.MCP.Framing
                     , IntelliMonad.MCP.Correlate
                     , IntelliMonad.MCP.Negotiate
                     , IntelliMonad.MCP.Transport
@@ -51,6 +53,7 @@ library
                     , IntelliMonad.MCP.Bridge
                     , IntelliMonad.MCP.Global
                     , IntelliMonad.MCP.Server
+                    , IntelliMonad.MCP.Wire
                     , IntelliMonad.Prompt
                     , IntelliMonad.Types
                     , IntelliMonad.Tools
@@ -78,6 +81,8 @@ library
                     , transformers >= 0.6.1 && < 0.7
                     , vector >= 0.13.1 && < 0.14
                     , aeson >= 2.1 && < 2.3
+                    , jsonrpc >= 0.2.0 && < 0.3
+                    , mcp-types >= 0.1.1 && < 0.2
                     , text >= 2.0.2 && < 2.2
                     , time >= 1.12.2 && < 1.15
                     , aeson-pretty >= 0.8.10 && < 0.9
@@ -182,6 +187,7 @@ test-suite intelli-monad-test
                     , PtySpec
                     , HttpSpec
                     , DpellaSpec
+                    , WireSpec
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -216,6 +222,9 @@ test-suite intelli-monad-test
       , process
       , network
       , http-client
+      , containers
+      , jsonrpc >= 0.2.0 && < 0.3
+      , mcp-types >= 0.1.1 && < 0.2
 
 test-suite doctests
     -- Import common warning flags.

@@ -7,8 +7,11 @@
 --
 -- Usage:
 --
--- > mcp-serve                      # serve all default tools
--- > mcp-serve --session mysession # bind tools/call to a session name
+-- > mcp-serve                        # serve all default tools
+-- > INTELLIMONAD_MCP_SESSION=foo mcp-serve  # bind tools/call to a session
+--
+-- The session is selected with the @INTELLIMONAD_MCP_SESSION@
+-- environment variable (default @mcp-serve@).
 --
 -- Protocol: newline-delimited JSON-RPC 2.0 on stdin\/stdout (the stdio
 -- transport of the MCP spec). Each @tools\/call@ runs the named tool

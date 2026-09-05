@@ -1,0 +1,117 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+-- | Model Context Protocol (MCP) integration for intelli-monad.
+--
+-- This module is documentation-only: it ties the ten @IntelliMonad.MCP.*@
+-- modules into one picture. Everything below is real code elsewhere in this
+-- package; importing this module imports nothing but the story.
+--
+-- == The stack, bottom to top
+--
+-- +-------------------------------+-------------------------------------------+
+-- | Layer                         | Modules                                   |
+-- +===============================+===========================================+
+-- | Wire encoding                 | "IntelliMonad.MCP.Framing",               |
+-- |                               | "IntelliMonad.MCP.Correlate",             |
+-- |                               | "IntelliMonad.MCP.Wire"                   |
+-- +-------------------------------+-------------------------------------------+
+-- | Versioning                    | "IntelliMonad.MCP.Negotiate"              |
+-- +-------------------------------+-------------------------------------------+
+-- | Transports                    | "IntelliMonad.MCP.Transport",             |
+-- |                               | "IntelliMonad.MCP.Transport.HTTP"         |
+-- +-------------------------------+-------------------------------------------+
+-- | Endpoints                     | "IntelliMonad.MCP.Client",                |
+-- |                               | "IntelliMonad.MCP.Server"                 |
+-- +-------------------------------+-------------------------------------------+
+-- | Integration                   | "IntelliMonad.MCP.Bridge",                |
+-- |                               | "IntelliMonad.MCP.Global"                 |
+-- +-------------------------------+-------------------------------------------+
+--
+-- == 1. Framing — bytes to lines
+--
+-- "IntelliMonad.MCP.Framing" turns a byte stream into newline-delimited
+-- JSON text. Its 'IntelliMonad.MCP.Framing.LineAssembler' handles the one
+-- reality of OS reads: they never align with message boundaries. A partial
+-- line sits in the assembler until its terminator arrives; a malformed line
+-- is reported and skipped, never fatal to the stream.
+--
+-- == 2. Correlate — lines to JSON-RPC
+--
+-- "IntelliMonad.MCP.Correlate" classifies each decoded message
+-- ('IntelliMonad.MCP.Correlate.Inbound': a response, a server request, or a
+-- notification) and matches responses to their pending request id. Every
+-- in-flight request owns a completion slot, so out-of-order responses are
+-- safe. This is also where request id registration happens — the typed
+-- mirror of that classification lives in "IntelliMonad.MCP.Wire".
+--
+-- == 3. Wire — the typed boundary (optional)
+--
+-- "IntelliMonad.MCP.Wire" bridges the session machinery's raw aeson
+-- @Value@ world (see "Data.Aeson") to the typed model of the @mcp-types@
+-- package (2025-06-18 protocol types). The machinery itself deliberately stays raw — the JSON-RPC surface
+-- is a moving target across revisions — but callers who want compile-time
+-- checked request/response construction, or @mcp-types@' own stricter
+-- parsing of @tools\/call@ params, go through 'IntelliMonad.MCP.Wire.encodeRequest',
+-- 'IntelliMonad.MCP.Wire.decodeResult', and friends. The two paths produce
+-- byte-identical wire shapes (verified in the test-suite); discovery
+-- payloads stay raw because @mcp-types@' 'MCP.Types.InputSchema' model is
+-- intentionally lossy (it drops schema keywords such as
+-- @additionalProperties@).
+--
+-- == 4. Negotiate — agreeing on a revision
+--
+-- "IntelliMonad.MCP.Negotiate" holds the compatibility matrix — five
+-- protocol revisions (2024-11-05 through 2025-06-18) as data — and
+-- implements the @initialize@ handshake: propose our revision plus
+-- capabilities, accept the server's counter-offer, and gate features on
+-- 'IntelliMonad.MCP.Negotiate.supportsFeature'. Downgrade, never fail: a
+-- 2025-06-18 client happily talks to a 2024-11-05 server.
+--
+-- == 5. Transport — moving the bytes
+--
+-- "IntelliMonad.MCP.Transport" defines the transport contract: three
+-- operations ('IntelliMonad.MCP.Transport.tSend', 'IntelliMonad.MCP.Transport.tRecv',
+-- 'IntelliMonad.MCP.Transport.tClose') over newline-delimited JSON. Two
+-- implementations exist:
+--
+--   * /stdio/ — a child process's stdin\/stdout (the transport of
+--     @mcp-serve@ and most desktop-tool servers), and the in-memory pair
+--     the test-suite uses to exercise sessions without spawning anything.
+--   * "IntelliMonad.MCP.Transport.HTTP" — Streamable HTTP (spec
+--     2025-03-26 and later): POST for client requests, an optional SSE
+--     stream for server-initiated messages, session-id echo.
+--
+-- == 6. Client — the session
+--
+-- "IntelliMonad.MCP.Client" wires the layers into a live session:
+-- initialize, 'IntelliMonad.MCP.Client.mcpRequest' (one MVar per request,
+-- reader thread pumping the transport), 'IntelliMonad.MCP.Client.mcpNotify',
+-- and 'IntelliMonad.MCP.Client.respondToServer' for the reverse direction.
+-- The server never blocks the client: server-initiated requests are queued
+-- and answered by whichever thread takes them.
+--
+-- == 7. Server — the other end
+--
+-- "IntelliMonad.MCP.Server" serves a tool set over any transport (the
+-- @mcp-serve@ executable wraps it for stdio): @initialize@, @ping@,
+-- @tools\/list@, @tools\/call@, with results shaped by
+-- "IntelliMonad.MCP.Wire" helpers so both ends of this very package speak
+-- byte-identical MCP.
+--
+-- == 8. Bridge + Global — joining the REPL
+--
+-- "IntelliMonad.MCP.Bridge" converts @tools\/list@ results into the REPL's
+-- 'Louter.Tool' chain and routes calls back to the owning server — MCP
+-- tools become first-class runtime tools next to the compile-time proxies.
+-- "IntelliMonad.MCP.Global" owns the process-wide registry behind the
+-- REPL's @:mcp@ command (@:mcp add\/list\/remove@), the one place a global
+-- is allowed.
+--
+-- == Testing story
+--
+-- The unit suite runs sessions over an in-memory transport pair; the
+-- acceptance suites run the client against the real @pty-mcp-server@
+-- binary, against this package's own @mcp-serve@ (loopback), and against
+-- the DPella @mcp@ example server (Streamable HTTP cross-check). Doctests
+-- cover the pure protocol modules. All of it runs on GHC 9.6–9.12.
+module IntelliMonad.MCP () where

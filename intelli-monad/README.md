@@ -21,6 +21,22 @@ export PATH=~/.local/bin:$PATH
 cabal install intelli-monad
 ```
 
+### Bash completion (optional)
+
+The package ships a completion script for the CLI subcommands:
+
+```bash
+mkdir -p ~/.local/share/bash-completion/completions
+cp bash_completion.d/intelli-monad ~/.local/share/bash-completion/completions/
+```
+
+### Static binaries (releases)
+
+Tag pushes build fully static musl binaries of `intelli-monad` and
+`mcp-serve` (`x86_64` Linux, no runtime dependencies) and upload them as
+CI artifacts — see the `static-binary` job in
+`.github/workflows/haskell.yml`.
+
 # Usage of repl
 
 After install intelli-monad, set OPENAI_API_KEY, then run intelli-monad command.

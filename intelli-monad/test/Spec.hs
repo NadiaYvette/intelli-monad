@@ -28,6 +28,7 @@ import qualified PtySpec
 import qualified LoopbackSpec
 import qualified HttpSpec
 import qualified DpellaSpec
+import qualified WireSpec
 import qualified BridgeSpec
 
 -- Test types for enum (all nullary constructors)
@@ -103,6 +104,7 @@ main = hspec $ do
   LoopbackSpec.spec
   HttpSpec.spec
   DpellaSpec.spec
+  WireSpec.spec
   BridgeSpec.spec
 
   describe "JSON Schema Generation for Sum Types" $ do

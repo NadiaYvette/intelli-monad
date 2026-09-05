@@ -37,6 +37,7 @@ libraryModules =
   [ "src/IntelliMonad/MCP/Framing.hs"
   , "src/IntelliMonad/MCP/Correlate.hs"
   , "src/IntelliMonad/MCP/Negotiate.hs"
+  , "src/IntelliMonad/MCP/Wire.hs"
   ]
 
 -- | Extensions the library is compiled with; example import groups need

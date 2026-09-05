@@ -25,3 +25,8 @@ extra-deps:
   - louter-0.1.1.2
   # Not in stackage either.
   - sixel-0.1.2.3
+  # MCP typed wire layer (2025-06-18 protocol types) + its JSON-RPC
+  # envelope model. Neither is in lts-23.28; versions match the cabal
+  # bounds (mcp-types >= 0.1.1 && < 0.2, jsonrpc >= 0.2.0 && < 0.3).
+  - mcp-types-0.1.1
+  - jsonrpc-0.2.0.0
