@@ -1,0 +1,27 @@
+# Stack build for intelli-monad — Phase 7 of the MCP plan.
+#
+# One source of truth remains the cabal files; this snapshot exists so
+# LTS users can build the project the way the drshade mcp-server
+# precedent does. Resolver lts-23.28 is the newest LTS on GHC 9.8.4 —
+# the same compiler grade the cabal CI matrix tests.
+#
+# Build (stack needs a GHC 9.8.4 on PATH; ghcup's copy works):
+#   PATH=~/.ghcup/ghc/9.8.4/bin:$PATH stack build
+resolver: lts-23.28
+
+system-ghc: true
+install-ghc: false
+
+packages:
+  - intelli-monad
+  - openai-servant-gen
+  - openai-servant-gen-examples
+
+# Filled from the first dry-run's complaints; versions match what the
+# cabal solver picks today (see git log for the original audit).
+extra-deps:
+  # Not in stackage; louter-0.1.1.2 is the upstream pin (its deps all
+  # resolve inside lts-23.28).
+  - louter-0.1.1.2
+  # Not in stackage either.
+  - sixel-0.1.2.3

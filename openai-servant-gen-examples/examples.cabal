@@ -23,10 +23,10 @@ name:               examples
 version:            0.1.0.0
 
 -- A short (one-line) description of the package.
--- synopsis:
+synopsis:           Example executables for openai-servant-gen
 
 -- A longer description of the package.
--- description:
+description:        Small client examples (chat completion, TTS, local server) built on the openai-servant-gen generated client.
 
 -- The license under which the package is released.
 license:            MIT
@@ -59,56 +59,56 @@ common warnings
 executable chat-completion
     import:           warnings
     main-is:          chat-completion.hs
-    build-depends:    base >= 4.0
-                    , http-client
-                    , http-client-tls
-                    , servant-client
-                    , openai-servant-gen
-                    , text
-                    , aeson
-                    , bytestring
+    build-depends:    base >= 4.0 && < 5
+                    , http-client >= 0.7 && < 0.8
+                    , http-client-tls >= 0.3 && < 0.4
+                    , servant-client >= 0.19 && < 0.21
+                    , openai-servant-gen >= 0.1 && < 0.2
+                    , text >= 2.0 && < 3
+                    , aeson >= 2.1 && < 2.3
+                    , bytestring >= 0.11 && < 1
     hs-source-dirs:   app
     default-language: Haskell2010
 
 executable chat-completion-local
     import:           warnings
     main-is:          chat-completion-local.hs
-    build-depends:    base >= 4.0
-                    , http-client
-                    , http-client-tls
-                    , servant-client
-                    , openai-servant-gen
-                    , text
+    build-depends:    base >= 4.0 && < 5
+                    , http-client >= 0.7 && < 0.8
+                    , http-client-tls >= 0.3 && < 0.4
+                    , servant-client >= 0.19 && < 0.21
+                    , openai-servant-gen >= 0.1 && < 0.2
+                    , text >= 2.0 && < 3
     hs-source-dirs:   app
     default-language: Haskell2010
 
 executable text2speech
     import:           warnings
     main-is:          text2speech.hs
-    build-depends:    base >= 4.0
-                    , http-client
-                    , http-client-tls
-                    , servant-client
-                    , openai-servant-gen
-                    , text
-                    , aeson
-                    , servant
-                    , bytestring
+    build-depends:    base >= 4.0 && < 5
+                    , http-client >= 0.7 && < 0.8
+                    , http-client-tls >= 0.3 && < 0.4
+                    , servant-client >= 0.19 && < 0.21
+                    , openai-servant-gen >= 0.1 && < 0.2
+                    , text >= 2.0 && < 3
+                    , aeson >= 2.1 && < 2.3
+                    , servant >= 0.19 && < 0.21
+                    , bytestring >= 0.11 && < 1
     hs-source-dirs:   app
     default-language: Haskell2010
 
 executable chat-completion-server
     import:           warnings
     main-is:          chat-completion-server.hs
-    build-depends:    base >= 4.0
-                    , http-client
-                    , http-client-tls
-                    , servant-client
-                    , servant-server
-                    , servant
-                    , openai-servant-gen
-                    , text
-                    , bytestring
-                    , transformers
+    build-depends:    base >= 4.0 && < 5
+                    , http-client >= 0.7 && < 0.8
+                    , http-client-tls >= 0.3 && < 0.4
+                    , servant-client >= 0.19 && < 0.21
+                    , servant-server >= 0.19 && < 0.21
+                    , servant >= 0.19 && < 0.21
+                    , openai-servant-gen >= 0.1 && < 0.2
+                    , text >= 2.0 && < 3
+                    , bytestring >= 0.11 && < 1
+                    , transformers >= 0.5 && < 0.7
     hs-source-dirs:   app
     default-language: Haskell2010
