@@ -140,19 +140,51 @@ table =
         [ (("sml", "Basis/int"), Member FSigned Nothing "SML Basis: Int precision is implementation-defined (SML/NJ 31, MLton 63)"),
           (("mercury", "std/int"), Member FSigned Nothing "Mercury library: int is implementation-defined (>= 31 bits)")
         ],
+        -- C++: ISO C++ guarantees long >= 32 bits; every LP64 target
+        -- organ-bank runs on makes it 64. The corpus cpp example emits
+        -- std/long for factorial's argument and result.
+        [ (("cpp", "std/long"), Member FSigned (Just 64) "ISO C++: long is 64 bits on LP64 targets")
+        ],
+        -- Ada: the corpus ada example emits Standard/Integer; GNAT
+        -- defines it as 32 bits (RM B.1).
+        [ (("ada", "Standard/Integer"), Member FSigned (Just 32) "GNAT: Integer is 32 bits (Ada RM B.1)")
+        ],
         -- Arbitrary precision.
         [ (("lean4", "Lean/Nat"), Member FBigInt Nothing "Lean 4: Nat is arbitrary precision"),
           (("agda", "Agda.Builtin.Nat/Nat"), Member FBigInt Nothing "Agda: Nat is arbitrary precision")
+        ],
+        -- Canonical core: the shared primitives. Attributed to the
+        -- organ-ir shim convention rather than any language standard —
+        -- no corpus example emits them yet — so bool/unit/text
+        -- crossings can be licensed without each shim inventing its
+        -- own module. A shim that names, say, "std/bool" instead still
+        -- needs its own entry; the core names are the agreement point.
+        [ (("core", "core/bool"), Member FBool Nothing "organ-ir shim convention: canonical boolean"),
+          (("core", "core/unit"), Member FUnit Nothing "organ-ir shim convention: canonical unit"),
+          (("core", "core/text"), Member FText Nothing "organ-ir shim convention: canonical text")
         ]
       ]
 
 -- | Resolve a (language, module, name) triple. The dynamic marker — a
 -- qname rendering to @.../any@ — is recognized for every language,
 -- since every shim uses it for values it could not pin down.
+--
+-- >>> mFamily <$> memberOf "c" "std" "int32"
+-- Just FSigned
+-- >>> mWidth <$> memberOf "haskell" "ghc-prim" "Int#"
+-- Just (Just 64)
+-- >>> mWidth <$> memberOf "sml" "Basis" "int"   -- honest unknown
+-- Just Nothing
+-- >>> memberOf "c" "std" "int24"                -- fail closed
+-- Nothing
+-- >>> mFamily <$> memberOf "lua" "std" "any"    -- dynamic marker
+-- Just FDynamic
+-- >>> mFamily <$> memberOf "Haskell" "ghc-prim" "Int#"  -- case-insensitive
+-- Just FSigned
 memberOf :: Text -> Text -> Text -> Maybe Member
-memberOf lang mod nm
+memberOf lang mdl nm
   | nm == "any" = Just dyn
-  | otherwise = Map.lookup (T.toLower lang, mod <> "/" <> nm) table
+  | otherwise = Map.lookup (T.toLower lang, mdl <> "/" <> nm) table
 
 -- | The verdict a pair of axioms grants, with the cited axioms.
 --
@@ -165,6 +197,23 @@ memberOf lang mod nm
 --   * @unlicensed-*@ — the crossing can lose information; the stub
 --     generator must refuse (narrowing, overflow domain, unprovable
 --     range) or the families simply do not connect.
+--
+-- The verdict names are stable API — stub generation keys on them —
+-- so the examples pin them exactly. Widths interact with signedness:
+--
+-- >>> let m f w n = Member f w n
+-- >>> fst (license (m FSigned (Just 32) "") (m FSigned (Just 32) ""))
+-- "licensed-lossless"
+-- >>> fst (license (m FSigned (Just 32) "") (m FSigned (Just 64) ""))
+-- "licensed-widening"
+-- >>> fst (license (m FSigned (Just 64) "") (m FSigned (Just 32) ""))
+-- "unlicensed-narrowing"
+-- >>> fst (license (m FSigned (Just 32) "") (m FUnsigned (Just 64) ""))
+-- "unlicensed-overflow-domain"
+-- >>> fst (license (m FDynamic Nothing "") (m FSigned (Just 64) ""))
+-- "licensed-with-runtime-checks"
+-- >>> fst (license (m FSigned (Just 32) "") (m FFloat (Just 64) ""))
+-- "unlicensed-family"
 license :: Member -> Member -> (Text, [Text])
 license a b = case (mFamily a, mFamily b) of
   (FDynamic, _) ->
@@ -233,6 +282,17 @@ axiomLine m =
 -- call. Ranks: lossless < widening < runtime-checks < any unlicensed.
 -- An empty list means no position was resolvable and the caller must
 -- fall back to the descriptive report.
+--
+-- >>> aggregate []
+-- Nothing
+-- >>> aggregate ["licensed-lossless", "licensed-widening"]
+-- Just "licensed-widening"
+-- >>> aggregate ["licensed-widening", "licensed-with-runtime-checks"]
+-- Just "licensed-with-runtime-checks"
+-- >>> aggregate ["licensed-lossless", "unlicensed-narrowing", "licensed-widening"]
+-- Just "unlicensed-narrowing"
+-- >>> aggregate ["licensed-lossless", "something-new"]   -- unknown fails closed
+-- Just "something-new"
 aggregate :: [Text] -> Maybe Text
 aggregate [] = Nothing
 aggregate verdicts = Just $ foldl' weakest "licensed-lossless" verdicts

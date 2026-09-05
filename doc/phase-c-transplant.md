@@ -83,3 +83,34 @@ its own verification cost.
 - No shared-heap or cross-runtime pointer passing, ever.
 - No dynamic-language transplants without runtime checks; `licensed-
   with-runtime-checks` means the stub generates checkers, not trust.
+
+## C1 — DONE (2026-09-06)
+
+`IntelliMonad.Tools.OrganBank.Stubs` is the stub generator skeleton,
+pure and compiler-free:
+
+- `planBoundary` re-runs the dictionary licensing (same axioms, same
+  direction rules as organ_check_boundary, so the two cannot
+  disagree) and either refuses with cited axioms or yields a
+  `StubPlan`. Aggregate refusal is the weakest link; an empty
+  position list refuses as `unlicensed-empty`.
+- `renderCStubs` emits deterministic C-ABI text: a caller-side island
+  wrapper (caller-typed params/return, `extern` declaring the callee's
+  ABI, explicit conversion casts), marshal notes per position, and a
+  callee-side wrapper whose trampoline is C2's to fill. Refusals
+  render as comment-only debris — no compilable artifact survives an
+  unlicensed crossing.
+- The two licensed fixture pairs are pinned by exact-render golden
+  tests: haskell `Int#` ↔ rust `i64` (lossless), C `int32` widened
+  into `i64` (widening; the sign-extension note is part of the gold).
+- Direction convention documented in the module header: positions
+  list members in value-flow order, so arguments are caller→callee
+  and the result is callee→caller — the same rule the boundary tool
+  licenses with.
+
+Suite: 148 hspec examples + 88 doctests, 0 failures on 9.8.4.
+
+Next: C2 compiles the C fixture for real (one process, two islands),
+C3 adds the Koka effect-row case, and the dictionary's canonical-core
+entries (`core/bool`, `core/unit`, `core/text`) await a first shim
+adoption.
