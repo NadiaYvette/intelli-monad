@@ -135,8 +135,8 @@ runScenario trans = do
         Just (A.Array xs) -> do
           let names = [n | A.Object t <- toList xs, Just (A.String n) <- [KM.lookup "name" t]]
               nSchema = length [ () | A.Object t <- toList xs, Just (A.Object _) <- [KM.lookup "inputSchema" t] ]
-          L.sort names `shouldBe` ["call_bash_script", "search_arxiv"]
-          nSchema `shouldBe` 2
+          L.sort names `shouldBe` ["call_bash_script", "organ_check_boundary", "organ_diagnostics", "organ_find_symbol", "organ_ingest", "organ_repo_map", "search_arxiv"]
+          nSchema `shouldBe` 7
         _ -> expectationFailure "tools/list reply missing tools array"
     Right v -> expectationFailure ("unexpected tools/list reply: " <> show v)
 
