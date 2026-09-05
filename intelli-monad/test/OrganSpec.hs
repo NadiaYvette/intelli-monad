@@ -22,6 +22,8 @@ import Test.Hspec
 
 import IntelliMonad.Tools.OrganBank
 import IntelliMonad.Types (HasFunctionObject (..))
+import Database.Persist.Sqlite (PersistValue (..))
+import System.FilePath (takeFileName)
 
 -- | The two-name sample document used by most tests. Mirrors
 -- spec/organ-ir-example.json's shape (haskell, fn type with effect row).
@@ -134,6 +136,16 @@ withFreshIndex act = do
       removeDirectoryRecursive fp
       return r
 
+-- | Read the diagnostics table the way organ_diagnostics does —
+-- used to assert what an ingest actually recorded.
+readDiagnostics :: FilePath -> IO [(FilePath, Text, Text)]
+readDiagnostics idx =
+  withIndex idx $ \conn ->
+    queryRows conn
+      "SELECT source_file, severity, message FROM diagnostics ORDER BY rowid"
+      []
+      (\r -> return (T.unpack (pvText (r !! 0)), pvText (r !! 1), pvText (r !! 2)))
+
 spec :: Spec
 spec = do
   describe "ingestPath" $ do
@@ -152,6 +164,85 @@ spec = do
         ingestPath idx tmp
       ok `shouldBe` 2
       bad `shouldBe` 1
+
+  describe "diag envelope ingestion (organ-extract --diag)" $ do
+    let envelope files =
+          A.object
+            [ "organ_diag_version" A..= ("1" :: Text),
+              "files" A..= files
+            ]
+        row :: FilePath -> A.Value -> Text -> A.Value
+        row p st err =
+          A.object
+            [ "path" A..= p,
+              "language" A..= A.Null,
+              "shim" A..= A.Null,
+              "status" A..= st,
+              "exit_code" A..= A.Null,
+              "stderr" A..= err,
+              "warnings" A..= ([] :: [Text])
+            ]
+        -- Direct-diag variant of withFreshIndex: same temp discipline,
+        -- but seeds an envelope instead of module JSONs.
+        withDiagIndex files act = do
+          tmpRoot <- getTemporaryDirectory
+          (fp, h) <- openTempFile tmpRoot "organ-test"
+          hClose h
+          removeFile fp
+          createDirectory fp
+          A.encodeFile (fp ++ "/diag.json") (envelope files)
+          old <- lookupEnv "ORGAN_INDEX"
+          setEnv "ORGAN_INDEX" (fp ++ "/index.db")
+          r <- act fp
+          case old of
+            Just v -> setEnv "ORGAN_INDEX" v
+            Nothing -> unsetEnv "ORGAN_INDEX"
+          removeDirectoryRecursive fp
+          return r
+    it "routes envelopes to diagnostics, one row per file, keeping verbatim stderr" $ do
+      ((ok, bad, _errs), rows) <- withDiagIndex
+        [ row "/src/good.lua" "ok" "",
+          row "/src/bad.lua" "error" "Parse error: Unexpected token",
+          row "/src/noexe.erl" "error" "erlc-organ could not be run: posix_spawnp"
+        ]
+        $ \tmp -> do
+          idx <- defaultOrganIndex
+          r <- ingestPath idx tmp
+          rows <- readDiagnostics (tmp ++ "/index.db")
+          return (r, rows)
+      ok `shouldBe` 1
+      bad `shouldBe` 0
+      map (\(f, s, m) -> (takeFileName f, s, m)) rows
+        `shouldBe`
+          [ ("good.lua", "ok", "ok"),
+            ("bad.lua", "error", "Parse error: Unexpected token"),
+            ("noexe.erl", "error", "erlc-organ could not be run: posix_spawnp")
+          ]
+
+    it "parses DiagRow severity from status, keeping stderr verbatim" $
+      do
+        let v = row "/x/bad.c" "error" ("cpp-organ failed (exit 1) on /x/bad.c: syntax" :: Text)
+        case A.fromJSON v of
+          A.Success r -> do
+            drSeverity r `shouldBe` "error"
+            drMessage r `shouldBe` "cpp-organ failed (exit 1) on /x/bad.c: syntax"
+          A.Error e -> expectationFailure e
+    it "maps ok status with empty stderr to a plain ok row" $
+      do
+        let v = row "/x/good.c" "ok" ("" :: Text)
+        case A.fromJSON v of
+          A.Success r -> do
+            drSeverity r `shouldBe` "ok"
+            drMessage r `shouldBe` "ok"
+          A.Error e -> expectationFailure e
+    it "maps ok status with non-empty stderr to a warning row" $
+      do
+        let v = row "/x/warn.c" "ok" ("note: skipped construct" :: Text)
+        case A.fromJSON v of
+          A.Success r -> do
+            drSeverity r `shouldBe` "ok"
+            drMessage r `shouldBe` "warning: note: skipped construct"
+          A.Error e -> expectationFailure e
 
   describe "HasFunctionObject" $ do
     it "names the tools in the organ_* namespace" $ do

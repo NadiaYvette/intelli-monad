@@ -228,6 +228,7 @@ test-suite intelli-monad-test
       , containers
       , jsonrpc >= 0.2.0 && < 0.3
       , mcp-types >= 0.1.1 && < 0.2
+      , persistent-sqlite
 
 test-suite doctests
     -- Import common warning flags.

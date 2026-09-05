@@ -43,6 +43,11 @@ module IntelliMonad.Tools.OrganBank
   , boundaryReport
   , renderRepoMap
   , BoundaryReport (..)
+  -- * Internal (exposed for tests)
+  , withIndex
+  , queryRows
+  , pvText
+  , DiagRow (..)
   ) where
 
 import Control.Exception (SomeException, try)
@@ -302,6 +307,65 @@ ingestFile conn fp = do
         Left (e :: SomeException) -> return (Left (T.pack ("stored parse but upsert failed: " <> show e)))
         Right res -> return res
 
+--------------------------------------------------------------------------------
+-- Diagnostics-envelope ingestion (organ-extract --diag)
+--------------------------------------------------------------------------------
+
+-- | The per-file rows of organ-extract's @--diag@ envelope
+-- (organ_diag_version 1). Only the fields the index stores are decoded;
+-- warnings/shim are optional and tolerated-absent so older envelopes
+-- still ingest.
+data DiagRow = DiagRow
+  { drPath :: FilePath,
+    drSeverity :: Text,
+    drMessage :: Text
+  }
+  deriving (Eq, Show)
+
+instance A.FromJSON DiagRow where
+  parseJSON = A.withObject "DiagRow" $ \o -> do
+    path <- o A..: "path"
+    status <- o A..: "status"
+    stderrMsg <- o A..:? "stderr"
+    let sev = if status == ("ok" :: Text) then "ok" else "error"
+        msg = case (status, stderrMsg) of
+          ("ok", Just e) | not (T.null e) -> "warning: " <> e
+          ("ok", _) -> "ok"
+          (_, Just e) | not (T.null e) -> e
+          _ -> "failed (no stderr captured)"
+    pure (DiagRow path sev msg)
+
+-- | The organ-extract @--diag@ envelope (organ_diag_version 1):
+-- @{"organ_diag_version": "1", "files": [...]}@. The version key is
+-- tolerated-extra; only @files@ is decoded.
+newtype DiagEnvelope = DiagEnvelope {deFiles :: [DiagRow]}
+  deriving (Eq, Show)
+
+instance A.FromJSON DiagEnvelope where
+  parseJSON = A.withObject "DiagEnvelope" $ \o ->
+    DiagEnvelope <$> o A..: "files"
+
+-- | Ingest an organ-extract @--diag@ envelope: one diagnostics row per
+-- file, keeping verbatim stderr so compiler messages survive the trip.
+-- Files that extracted fine record a plain "ok" row; successes with
+-- non-empty stderr record a warning.
+ingestDiagEnvelope :: Connection -> FilePath -> IO (Either Text Text)
+ingestDiagEnvelope conn fp = do
+  r <- try (A.eitherDecodeFileStrict' fp) :: IO (Either SomeException (Either String DiagEnvelope))
+  case r of
+    Left e -> return (Left (T.pack (show e)))
+    Right (Left err) -> return (Left (T.pack ("not a --diag envelope: " ++ err)))
+    Right (Right env) ->
+      try (do
+        forM_ (deFiles env) $ \row ->
+          execSql conn
+            "INSERT INTO diagnostics(source_file, severity, message, ingested_at) VALUES (?, ?, ?, datetime('now'))"
+            [PersistText (T.pack (drPath row)), PersistText (drSeverity row), PersistText (drMessage row)]
+        return (Right (T.pack (show (length (deFiles env))) <> " diagnostic rows")))
+        >>= \case
+          Left (e :: SomeException) -> return (Left (T.pack ("diag rows rejected: " <> show e)))
+          Right res -> return res
+
 upsertModule :: Connection -> OrganDoc -> IO ()
 upsertModule conn doc = do
   let mod' = odModule doc
@@ -427,11 +491,15 @@ organJsonFiles p = do
 
 -- | Ingest a file or directory tree of OrganIR JSON into the index.
 -- Returns (ingested, failed) counts plus per-file error messages.
+-- A file that carries the organ-extract @--diag@ envelope
+-- (@"organ_diag_version"@ key) is routed to the diagnostics ingester
+-- instead of the module ingester, so one tool covers both artifact
+-- kinds; the envelope is self-describing so the sniff is reliable.
 ingestPath :: FilePath -> FilePath -> IO (Int, Int, [Text])
 ingestPath indexPath inputPath = do
   files <- organJsonFiles inputPath
   withIndex indexPath $ \conn -> do
-    results <- forM files $ \fp -> ingestFile conn fp
+    results <- forM files $ \fp -> sniffAndIngest conn fp
     let errs = [(f, e) | (f, Left e) <- zip files results]
     forM_ errs $ \(f, e) ->
       execSql conn "INSERT INTO diagnostics(source_file, severity, message, ingested_at) VALUES (?, 'error', ?, datetime('now'))"
@@ -439,6 +507,21 @@ ingestPath indexPath inputPath = do
     let ok = length [() | Right _ <- results]
         bad = length errs
     return (ok, bad, [T.pack f <> ": " <> e | (f, e) <- errs])
+
+-- | Route one JSON file to the right ingester by content: diag
+-- envelopes (self-describing via @organ_diag_version@) go to the
+-- diagnostics path, everything else is treated as an OrganIR module.
+sniffAndIngest :: Connection -> FilePath -> IO (Either Text Text)
+sniffAndIngest conn fp = do
+  isDiag <- looksLikeDiagEnvelope fp
+  if isDiag then ingestDiagEnvelope conn fp else ingestFile conn fp
+
+looksLikeDiagEnvelope :: FilePath -> IO Bool
+looksLikeDiagEnvelope fp = do
+  r <- try (A.eitherDecodeFileStrict' fp) :: IO (Either SomeException (Either String A.Value))
+  case r of
+    Right (Right (A.Object o)) -> return (KM.member "organ_diag_version" o)
+    _ -> return False
 
 --------------------------------------------------------------------------------
 -- Tool inputs/outputs
