@@ -1,0 +1,8 @@
+dist-newstyle/
+.stack-work/
+result
+result-*
+stack.yaml.lock
+*.hi
+*.o
+*.tix
