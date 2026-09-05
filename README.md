@@ -193,12 +193,24 @@ intelli-monad/
 # Build
 cabal build all
 
-# Run tests
+# Run tests (unit + doctests — `cabal test all` picks up both)
 cabal test
+
+# Doctests only
+# (runnable examples live in the Haddocks of IntelliMonad.MCP.Framing,
+#  IntelliMonad.MCP.Correlate and IntelliMonad.MCP.Negotiate)
+cabal test doctests
 
 # Build with profiling
 cabal build --enable-profiling
 ```
+
+> **Multi-toolchain note:** `cabal` resolves `ghc` from `PATH`. If your box
+> has more than one GHC 9.8.x (e.g. a distro build plus ghcup), pin both
+> `PATH` *and* `--with-compiler` to the same installation, and keep that
+> consistent across foreground and background (`systemd-run`) jobs — a build
+> tree shared between toolchains yields package registrations GHC refuses to
+> load together ("unusable due to missing dependencies").
 
 ## Dependencies
 

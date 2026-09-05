@@ -52,10 +52,23 @@ revisionString r = case r of
 
 -- | Parse a wire protocol-version string back to a 'Revision'
 -- (leading/trailing whitespace tolerated).
+--
+-- >>> parseRevision "2025-06-18"
+-- Just R2025_06_18
+-- >>> parseRevision " 2025-03-26 "
+-- Just R2025_03_26
+-- >>> parseRevision "1999-01-01"
+-- Nothing
+--
+-- Round-trips with 'revisionString' for every known revision:
+--
+-- >>> import Data.Maybe (mapMaybe)
+-- >>> map revisionString (mapMaybe (parseRevision . revisionString) allRevisions) == map revisionString allRevisions
+-- True
 parseRevision :: Text -> Maybe Revision
 parseRevision t = find ((== T.strip t) . revisionString) allRevisions
 
--- | Every revision the client knows, oldest first. 'clientSupports'
+-- | Every revision the client knows, oldest first. 'supportsFeature'
 -- gates against this list.
 allRevisions :: [Revision]
 allRevisions = [minBound .. maxBound]
@@ -75,6 +88,17 @@ data Feature
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 -- | The matrix. One clause per feature; each line cites its revision(s).
+--
+-- >>> supportsFeature R2025_03_26 FBatching
+-- True
+-- >>> supportsFeature R2025_06_18 FBatching
+-- False
+-- >>> supportsFeature R2024_11_05 FStreamableHttp
+-- False
+-- >>> supportsFeature R2025_03_26 FStreamableHttp
+-- True
+-- >>> supportsFeature R2026_07_28 FRequiresInitialize
+-- False
 supportsFeature :: Revision -> Feature -> Bool
 supportsFeature r f = case f of
   FBatching -> r == R2025_03_26
@@ -107,6 +131,24 @@ data Negotiation = Negotiation
 --     proposal and record why. Fixtures (Phase 3) pin the real-world
 --     behavior per server; a stricter disconnect policy can replace the
 --     fallback without touching any call site.
+--
+-- Exact agreement:
+--
+-- >>> negotiateWith clientDefault "2025-06-18"
+-- Negotiation {nRequested = R2025_06_18, nAgreed = R2025_06_18, nNote = "agreed 2025-06-18"}
+--
+-- The server answers with something older — we downgrade to speak its
+-- language:
+--
+-- >>> negotiateWith clientDefault "2024-11-05"
+-- Negotiation {nRequested = R2025_06_18, nAgreed = R2024_11_05, nNote = "downgraded from 2025-06-18 to 2024-11-05"}
+--
+-- Unknown or newer-than-ours versions fall back to our proposal:
+--
+-- >>> negotiateWith clientDefault "1999-01-01"
+-- Negotiation {nRequested = R2025_06_18, nAgreed = R2025_06_18, nNote = "unknown server version 1999-01-01; staying at ours; using 2025-06-18"}
+-- >>> negotiateWith R2024_11_05 "2025-06-18"
+-- Negotiation {nRequested = R2024_11_05, nAgreed = R2024_11_05, nNote = "server proposed newer 2025-06-18; staying at ours; using 2024-11-05"}
 negotiateWith :: Revision -> Text -> Negotiation
 negotiateWith requested serverStr =
   case parseRevision serverStr of

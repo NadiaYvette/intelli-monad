@@ -181,6 +181,7 @@ test-suite intelli-monad-test
                     , LoopbackSpec
                     , PtySpec
                     , HttpSpec
+                    , DpellaSpec
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -215,3 +216,27 @@ test-suite intelli-monad-test
       , process
       , network
       , http-client
+
+test-suite doctests
+    -- Import common warning flags.
+    import:           warnings
+
+    default-language: Haskell2010
+
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test
+    main-is:          Doctests.hs
+
+    -- The runner loads the library's source modules with the library's
+    -- dependencies visible, so the package itself is all it needs.
+    -- directory + filepath: locating cabal's .ghc.environment file.
+    build-depends:
+        base ==4.*
+      , intelli-monad
+      , doctest >=0.22
+      , directory
+      , filepath
+
+    -- Doctest's spawned GHC inherits this; the -package flag keeps the
+    -- library's transitive deps resolvable inside example import groups.
+    ghc-options:      -threaded

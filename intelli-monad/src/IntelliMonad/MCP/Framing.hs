@@ -44,6 +44,12 @@ import qualified Data.Text.Encoding.Error as TEE
 -- The encoded message contains no embedded newlines (aeson's encoder
 -- never emits raw newlines inside strings), satisfying the stdio spec's
 -- framing requirement.
+--
+-- >>> import qualified Data.Aeson as A
+-- >>> import qualified Data.ByteString as BS
+-- >>> import qualified Data.Text as T
+-- >>> BS.putStr (encodeMessage (A.object ["jsonrpc" A..= ("2.0" :: T.Text)]))
+-- {"jsonrpc":"2.0"}
 encodeMessage :: A.ToJSON a => a -> ByteString
 encodeMessage = BL.toStrict . (<> "\n") . A.encode
 
@@ -63,6 +69,21 @@ data DecodeError = DecodeError
 -- The final component is any trailing bytes after the last newline —
 -- an incomplete message the caller should expect to complete later.
 -- Empty lines are skipped.
+--
+-- >>> import qualified Data.Aeson as A
+-- >>> let (ok, bad, trailing) = decodeBuffer "{\"id\":1}\ngarbage line\n"
+-- >>> map A.encode ok
+-- ["{\"id\":1}"]
+-- >>> map dePayload bad
+-- ["garbage line"]
+-- >>> trailing
+-- Nothing
+--
+-- Bytes after the final newline come back in the third component:
+--
+-- >>> let (_, _, partial) = decodeBuffer "{\"id\":1}\npartial"
+-- >>> partial
+-- Just "partial"
 decodeBuffer
   :: ByteString
   -> ([Value], [DecodeError], Maybe ByteString)
@@ -102,6 +123,18 @@ data AssemblerEvent = LineComplete ByteString
 
 -- | Feed a raw read chunk into the assembler, extracting every complete
 -- line it finishes. Whatever follows the last newline stays buffered.
+-- Empty lines are consumed silently.
+--
+-- >>> let (ev1, a1) = feedChunk newLineAssembler "{\"id\":1}\n{\"id\":"
+-- >>> ev1
+-- [LineComplete "{\"id\":1}"]
+-- >>> assemblerPending a1
+-- "{\"id\":"
+-- >>> let (ev2, a2) = feedChunk a1 "2}\n\n"
+-- >>> ev2
+-- [LineComplete "{\"id\":2}"]
+-- >>> assemblerPending a2
+-- ""
 feedChunk
   :: LineAssembler
   -> ByteString

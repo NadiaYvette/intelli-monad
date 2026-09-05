@@ -5,3 +5,9 @@ packages:
 
 optional-packages:
         ../*.cabal
+
+-- Emit .ghc.environment.x86_64-linux-<ghc> at the project root after each
+-- build. The doctests runner's spawned GHCi reads this file to resolve the
+-- in-place intelli-monad package — without it, plain doctest cannot see
+-- private packages under `cabal test`.
+write-ghc-environment-files: always

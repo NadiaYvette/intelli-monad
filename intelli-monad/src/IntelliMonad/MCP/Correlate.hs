@@ -87,6 +87,13 @@ handleId (RequestHandle i) = i
 
 -- | Register a request: allocate the next id and record the method so a
 -- stray response can be diagnosed.
+--
+-- >>> import qualified Data.Aeson as A
+-- >>> let (_, h, corr) = register newCorrelator "tools/list"
+-- >>> handleId h
+-- 1
+-- >>> numPending corr
+-- 1
 register :: Correlator -> Text -> (Int, RequestHandle, Correlator)
 register (Correlator m) method =
   let nextId = maybe 1 ((1 +) . fst) (IM.lookupMax m)
@@ -116,6 +123,31 @@ data Inbound
   deriving (Eq, Show)
 
 -- | Classify one decoded JSON value from the wire.
+--
+-- A success response for one of our requests:
+--
+-- >>> import qualified Data.Aeson as A
+-- >>> let v = A.object ["jsonrpc" A..= "2.0", "id" A..= (1 :: Int), "result" A..= A.Null]
+-- >>> let InboundResponse rid _ = classify v
+-- >>> responseKey rid
+-- Just 1
+--
+-- A peer-initiated request (string ids are legal for server-initiated
+-- requests) and a notification:
+--
+-- >>> let InboundRequest m _ = classify (A.object ["jsonrpc" A..= "2.0", "id" A..= "srv-1", "method" A..= "ping"])
+-- >>> m
+-- "ping"
+-- >>> let InboundNotification n _ = classify (A.object ["method" A..= "tools/list_changed"])
+-- >>> n
+-- "tools/list_changed"
+--
+-- Protocol violations and non-objects are rejected, never crash:
+--
+-- >>> classify (A.object ["method" A..= "x", "result" A..= A.Null])
+-- Malformed "method and result/error co-occur"
+-- >>> classify (A.Number 1)
+-- Malformed "not an object"
 classify :: Value -> Inbound
 classify v = case v of
   A.Object o
@@ -171,6 +203,20 @@ data MatchResult
   deriving (Eq, Show)
 
 -- | Try to match a response-shaped message against open slots.
+--
+-- A response whose id has an open slot completes it:
+--
+-- >>> import qualified Data.Aeson as A
+-- >>> let (_, _, corr) = register newCorrelator "tools/list"
+-- >>> let v = A.object ["jsonrpc" A..= "2.0", "id" A..= (1 :: Int), "result" A..= A.Null]
+-- >>> case takeMatching corr (classify v) of Matched _ corr' -> numPending corr'; _ -> -1
+-- 0
+--
+-- An unknown id (stale or duplicate) leaves the correlator untouched:
+--
+-- >>> let stale = A.object ["jsonrpc" A..= "2.0", "id" A..= (99 :: Int), "result" A..= A.Null]
+-- >>> takeMatching corr (classify stale)
+-- NotMine Correlator [1]
 takeMatching :: Correlator -> Inbound -> MatchResult
 takeMatching corr (InboundResponse rid o) =
   case responseKey rid of
