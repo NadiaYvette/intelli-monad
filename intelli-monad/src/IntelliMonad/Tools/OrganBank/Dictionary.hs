@@ -40,8 +40,16 @@ data Family
     FSigned
   | -- | Unsigned integers, 'mWidth' bits unless 'Nothing'.
     FUnsigned
-  | -- | Arbitrary-precision integers (no meaningful width).
-    FBigInt
+  | -- | Arbitrary-precision signed integers (no meaningful width).
+    -- Distinct from 'FBigUnsigned' because the signedness of the
+    -- domain still crosses the boundary: a value below zero is real
+    -- for a signed bigint and unrepresentable for a Nat.
+    FBigSigned
+  | -- | Arbitrary-precision /non-negative/ integers (no meaningful
+    -- width): natural numbers. Every signed-bigint value is in-range
+    -- here only when it is >= 0; the widths rule refuses the negative
+    -- half as an overflow-domain failure.
+    FBigUnsigned
   | -- | IEEE-754 floating point, 'mWidth' bits unless 'Nothing'.
     FFloat
   | -- | The shim could not pin a representation (@\/any@): the value's
@@ -135,14 +143,16 @@ table =
         ],
         -- Koka: `int` is arbitrary precision — unboxed smallints carry a
         -- 63-bit payload (kklib.h: KK_TAG_BITS = 1 over a 64-bit kk_intf_t)
-        -- and values beyond spill to heap bigints. Every int64 value is
-        -- representable, so the ABI licenses i64↔koka losslessly for the
-        -- fixed-width scalar range (the spike's domain); the marshal notes
-        -- carry the spill caveat. Values *outside* int64 range are real for
-        -- koka but unrepresentable in a fixed-width partner — the dictionary
-        -- has no FBig member family yet (TODO), so such crossings are
-        -- currently under-modeled rather than refused.
-        [ (("koka", "std/core/int"), Member FSigned (Just 64) "Koka kklib.h: int is arbitrary precision; unboxed smallint payload is 63 bits (KK_TAG_BITS=1), full int64 range representable via heap bigints"),
+        -- and values beyond spill to heap bigints. The ABI entry models
+        -- the fixed-width scalar range: every int64 value is representable,
+        -- so i64↔koka licenses losslessly (the spike's domain; the C4
+        -- adapter marshals via kk_integer_from_int64 / kk_integer_clamp64).
+        -- The *full* value range is modeled separately as FBigSigned
+        -- (std/core/integer): values beyond int64 are real for koka, and a
+        -- crossing claiming them is refused (unlicensed-representation)
+        -- rather than under-modeled.
+        [ (("koka", "std/core/int"), Member FSigned (Just 64) "Koka kklib.h: int is arbitrary precision; unboxed smallint payload is 63 bits (KK_TAG_BITS=1), full int64 range representable via heap bigints — ABI models the i64 range"),
+          (("koka", "std/core/integer"), Member FBigSigned Nothing "Koka kklib.h: int is arbitrary precision (63-bit smallint payload + heap bigints) — the full unbounded domain, distinct from the ABI-modeled i64 range"),
           (("koka", "std/core/float64"), Member FFloat (Just 64) "Koka docs: float64 IEEE-754 double")
         ],
         -- Fortran: gfortran default INTEGER is kind=4 (32 bits); the
@@ -163,9 +173,12 @@ table =
         -- defines it as 32 bits (RM B.1).
         [ (("ada", "Standard/Integer"), Member FSigned (Just 32) "GNAT: Integer is 32 bits (Ada RM B.1)")
         ],
-        -- Arbitrary precision.
-        [ (("lean4", "Lean/Nat"), Member FBigInt Nothing "Lean 4: Nat is arbitrary precision"),
-          (("agda", "Agda.Builtin.Nat/Nat"), Member FBigInt Nothing "Agda: Nat is arbitrary precision")
+        -- Arbitrary precision. Lean/Agda Nat are genuinely unsigned:
+        -- the FBigUnsigned family lets the axiom table refuse a signed
+        -- bigint source (negatives do not transfer) as overflow-domain
+        -- rather than pretending the families are equivalent.
+        [ (("lean4", "Lean/Nat"), Member FBigUnsigned Nothing "Lean 4: Nat is arbitrary precision and non-negative"),
+          (("agda", "Agda.Builtin.Nat/Nat"), Member FBigUnsigned Nothing "Agda: Nat is arbitrary precision and non-negative")
         ],
         -- Canonical core: the shared primitives. Attributed to the
         -- organ-ir shim convention rather than any language standard —
@@ -237,8 +250,27 @@ license a b = case (mFamily a, mFamily b) of
   (FBool, FBool) -> lossless
   (FText, FText) -> lossless
   (FUnit, FUnit) -> lossless
-  (FBigInt, FBigInt) -> lossless
+  (FBigSigned, FBigSigned) -> lossless
+  (FBigSigned, FBigUnsigned) ->
+    ( "unlicensed-overflow-domain",
+      [axiomLine a, axiomLine b, "signed bigints admit values below zero; the non-negative side cannot represent them"]
+    )
+  (FBigUnsigned, FBigSigned) -> lossless
+  (FBigUnsigned, FBigUnsigned) -> lossless
   (FFloat, FFloat) -> widths
+  -- A big-integer domain against a fixed-width integer domain is a
+  -- representation mismatch, not a width comparison: the unbounded
+  -- side has values the bounded one cannot hold, and there is no
+  -- finite width pair to reason about. Refused outright; a real
+  -- crossing must first agree on a bounded range contract.
+  (FBigSigned, fb) | isInt fb ->
+    ("unlicensed-representation", [axiomLine a, axiomLine b, "unbounded integer domain cannot be embedded in a fixed-width one"])
+  (FBigUnsigned, fb) | isInt fb ->
+    ("unlicensed-representation", [axiomLine a, axiomLine b, "unbounded integer domain cannot be embedded in a fixed-width one"])
+  (fa, FBigSigned) | isInt fa ->
+    ("unlicensed-representation", [axiomLine a, axiomLine b, "fixed-width integer domain cannot hold an unbounded one"])
+  (fa, FBigUnsigned) | isInt fa ->
+    ("unlicensed-representation", [axiomLine a, axiomLine b, "fixed-width integer domain cannot hold an unbounded one"])
   -- Signed and unsigned integers are one representation family with a
   -- signedness constraint, not different families: the widths rules
   -- below decide, and the failure mode is overflow-domain, not family.
@@ -288,7 +320,8 @@ axiomLine m =
       FUnit -> "unit"
       FSigned -> "signed-int"
       FUnsigned -> "unsigned-int"
-      FBigInt -> "arbitrary-precision-int"
+      FBigSigned -> "arbitrary-precision-int"
+      FBigUnsigned -> "arbitrary-precision-nat"
       FFloat -> "float"
       FDynamic -> "dynamic"
 

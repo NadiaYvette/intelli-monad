@@ -82,3 +82,41 @@ subset rule licenses haskell-pure → koka-`div/exn` and refuses the
 reverse; the dictionary carries the koka int/float64 axioms, and the
 crossing plans losslessly the moment its island has a real entry to
 name (the adapter provides it here).
+
+## C4: the adapter becomes generated (run_koka_generated.sh)
+
+`run_koka_generated.sh` runs the C3 loop with **zero hand-written
+glue of any kind** — the ABI adapter included. The driver passes
+`opsCalleeAdapter: "kk_island_factorial"` and the wire emits
+`build-koka-gen/kk_adapter.c`: the int64→`kk_integer_t` projection,
+`kk_main_start` + module init/done contract, and the call to koka's
+real export (`kk_factorial_island_factorial`) all generated. The
+hand-written `factorial_kk_adapter.c` stays in the repo as the
+reviewed reference the generated text must match.
+
+The generated GHC adapter works the same way against the compiler's
+capi header (`<Module>_api.h`), so a wire-planned GHC island can be
+called from the C host too — the C2 loop's `hsCall` path no longer
+needs a hand-written `Factorial.hs` export just to serve the host.
+
+## The refusal, live (run_refused.sh)
+
+`run_refused.sh` drives the same two koka/rust islands in the
+direction the effect-row subset rule *refuses*: the effectful koka
+island (`<div,exn>`) wants to call the pure rust island. Over the
+real wire, `organ_plan_stub` returns `unlicensed-effect-row` with
+comment-only debris — no compilable code exists for a crossing the
+axioms cannot prove. Exit 0 iff the refusal is exactly as predicted.
+
+## FBig: arbitrary-precision domains are first-class
+
+The dictionary splits the old `FBigInt` into `FBigSigned` and
+`FBigUnsigned`: the signedness of an unbounded domain still crosses
+the boundary. Koka's *full* `int` domain is modeled as
+`std/core/integer` (FBigSigned) beside the ABI-range entry
+(`std/core/int`, FSigned 64) the C3 gold crosses; Lean4/Agda `Nat`
+are FBigUnsigned. A koka-bigint → rust-i64 crossing now refuses as
+`unlicensed-representation` (different domains, not a width guess),
+and a signed-bigint → Nat crossing refuses as `unlicensed-overflow-domain`
+(negatives do not transfer) — see the `C4: FBig member families`
+tests in `test/StubSpec.hs`.

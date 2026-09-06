@@ -112,6 +112,87 @@ fnTy argNames eff res =
 -- | Run an action with ORGAN_INDEX pointed at a fresh index inside a
 -- fresh temp dir, with the sample JSONs written beside it. Restores the
 -- env and removes the dir afterwards.
+-- | A Haskell document with a PURE definition (empty effect row).
+-- Module `FacPure` — distinct from sampleDoc's `Factorial` so the two
+-- can share the index without an ambiguous lang-qualified lookup. The
+-- fixture for the C4 adapter tests, where the crossing must be
+-- licensed before the adapter matters.
+haskellPureDoc :: A.Value
+haskellPureDoc =
+  A.object
+    [ "schema_version" A..= ("1.0.0" :: Text),
+      "metadata"
+        A..= A.object
+          [ "source_language" A..= ("haskell" :: Text),
+            "compiler_version" A..= ("ghc-9.8.4" :: Text),
+            "shim_version" A..= ("0.1.0" :: Text)
+          ],
+      "module"
+        A..= A.object
+          [ "name" A..= ("FacPure" :: Text),
+            "exports" A..= ["factorial" :: Text],
+            "definitions"
+              A..= [ def "FacPure" "factorial" "public" (fnTy ["int"] "pure" "int")
+                   ],
+            "data_types" A..= ([] :: [A.Value]),
+            "effect_decls" A..= ([] :: [A.Value])
+          ]
+    ]
+
+-- | A PURE rust document (rustDoc's definition is `io`): the pure
+-- caller side for the C4 adapter tests.
+rustPureDoc :: A.Value
+rustPureDoc =
+  A.object
+    [ "schema_version" A..= ("1.0.0" :: Text),
+      "metadata"
+        A..= A.object
+          [ "source_language" A..= ("rust" :: Text),
+            "shim_version" A..= ("0.1.0" :: Text)
+          ],
+      "module"
+        A..= A.object
+          [ "name" A..= ("factorial_pure" :: Text),
+            "definitions"
+              A..= [ def "factorial_pure" "factorial" "public" (fnTy ["int"] "pure" "int")
+                   ],
+            "data_types" A..= ([] :: [A.Value]),
+            "effect_decls" A..= ([] :: [A.Value])
+          ]
+    ]
+
+kokaDoc :: A.Value
+kokaDoc =
+  A.object
+    [ "schema_version" A..= ("1.0.0" :: Text),
+      "metadata"
+        A..= A.object
+          [ "source_language" A..= ("koka" :: Text),
+            "shim_version" A..= ("0.1.0" :: Text)
+          ],
+      "module"
+        A..= A.object
+          [ "name" A..= ("factorial" :: Text),
+            "definitions"
+              A..= [ def "factorial" "island-factorial" "public"
+                       (A.object
+                          [ "fn" A..= A.object
+                              [ "args" A..= [A.object ["multiplicity" A..= ("many" :: Text), "type" A..= kokaCon "std/core" "int"]],
+                                "effect" A..= A.object ["effects" A..= [kokaBare "std/core" "div", kokaBare "std/core" "exn"]],
+                                "result" A..= kokaCon "std/core" "int"
+                              ]
+                          ])
+                   ],
+            "data_types" A..= ([] :: [A.Value]),
+            "effect_decls" A..= ([] :: [A.Value])
+          ]
+    ]
+  where
+    kokaCon :: Text -> Text -> A.Value
+    kokaCon m n = A.object ["con" A..= A.object ["qname" A..= kokaBare m n]]
+    kokaBare :: Text -> Text -> A.Value
+    kokaBare m n = A.object ["module" A..= m, "name" A..= A.object ["text" A..= n]]
+
 withFreshIndex :: (FilePath -> IO a) -> IO a
 withFreshIndex act = do
   tmpRoot <- getTemporaryDirectory
@@ -119,8 +200,14 @@ withFreshIndex act = do
     withTempDir tmpRoot $ \tmp -> do
       let f1 = tmp ++ "/factorial.json"
           f2 = tmp ++ "/factorial_rs.json"
+          f3 = tmp ++ "/factorial_pure.json"
+          f4 = tmp ++ "/factorial_kk.json"
+          f5 = tmp ++ "/factorial_rs_pure.json"
       A.encodeFile f1 sampleDoc
       A.encodeFile f2 rustDoc
+      A.encodeFile f3 haskellPureDoc
+      A.encodeFile f4 kokaDoc
+      A.encodeFile f5 rustPureDoc
       old <- lookupEnv "ORGAN_INDEX"
       setEnv "ORGAN_INDEX" (tmp ++ "/index.db")
       r <- act tmp
@@ -157,7 +244,7 @@ spec = do
       (ok, bad, errs) <- withFreshIndex $ \tmp -> do
         idx <- defaultOrganIndex
         ingestPath idx tmp
-      ok `shouldBe` 2
+      ok `shouldBe` 5
       bad `shouldBe` 0
       errs `shouldBe` []
 
@@ -166,7 +253,7 @@ spec = do
         writeFile (tmp ++ "/broken.json") "{not json"
         idx <- defaultOrganIndex
         ingestPath idx tmp
-      ok `shouldBe` 2
+      ok `shouldBe` 5
       bad `shouldBe` 1
 
   describe "diag envelope ingestion (organ-extract --diag)" $ do
@@ -320,7 +407,7 @@ spec = do
         idx <- defaultOrganIndex
         _ <- ingestPath idx tmp
         r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
-          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "Factorial" "factorial" (Just "haskell") "factorial_rs" "factorial" (Just "rust") (Just "rs_island_fac"))
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "Factorial" "factorial" (Just "haskell") "factorial_rs" "factorial" (Just "rust") (Just "rs_island_fac") Nothing)
         let out = organPlanStubOutput r
         -- Both fixtures use the synthetic std/int qname, which has no
         -- dictionary axiom: memberFor falls back to the dynamic member
@@ -339,7 +426,7 @@ spec = do
         idx <- defaultOrganIndex
         _ <- ingestPath idx tmp
         r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
-          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_oc" "factorial" (Just "ocaml") "factorial_rs" "factorial" (Just "rust") Nothing)
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_oc" "factorial" (Just "ocaml") "factorial_rs" "factorial" (Just "rust") Nothing Nothing)
         let out = organPlanStubOutput r
         -- The result flows callee→caller: rust std/i64 (64 bits) into
         -- OCaml's 63-bit tagged int is a genuine narrowing.
@@ -352,10 +439,60 @@ spec = do
         idx <- defaultOrganIndex
         _ <- ingestPath idx tmp
         r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
-          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "Missing" "factorial" Nothing "factorial_rs" "factorial" (Just "rust") Nothing)
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "Missing" "factorial" Nothing "factorial_rs" "factorial" (Just "rust") Nothing Nothing)
         let out = organPlanStubOutput r
         opsoVerdict out `shouldBe` "unlicensed-resolve"
         any ("Symbol not in the index" `T.isInfixOf`) (opsoStubs out) `shouldBe` True
+
+    it "emits the C4 ABI adapter for a haskell callee when requested" $
+      withFreshIndex $ \tmp -> do
+        idx <- defaultOrganIndex
+        _ <- ingestPath idx tmp
+        -- rust caller -> haskell callee (FacPure, empty effect row):
+        -- the C4 projection bridges the wire's plain int64_t ABI onto
+        -- the island's own (the compiler's capi header supplies StgInt).
+        r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_pure" "factorial" (Just "rust") "FacPure" "factorial" (Just "haskell") (Just "hs_island_factorial") (Just "hs_island_factorial"))
+        let out = organPlanStubOutput r
+            adapterTxt = T.unpack (T.unlines (opsoAdapter out))
+        opsoVerdict out `shouldBe` "licensed-with-runtime-checks"
+        adapterTxt `shouldContain` "// ABI adapter: GHC island (generated, C4)"
+        adapterTxt `shouldContain` "#include \"FacPure_api.h\""
+        adapterTxt `shouldContain` "int64_t hs_island_factorial(int64_t n) {"
+        -- The generated adapter targets the island's convention entry:
+        -- Module_name, matching what the trampoline fills.
+        adapterTxt `shouldContain` "FacPure_factorial((HsInt64) n)"
+        -- The full stubs bundle carries the adapter section too.
+        any ("ABI adapter" `T.isInfixOf`) (opsoStubs out) `shouldBe` True
+        -- Without the request, no adapter: the default stays exactly as
+        -- C2/C3 left it.
+        r2 <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_pure" "factorial" (Just "rust") "FacPure" "factorial" (Just "haskell") (Just "hs_island_factorial") Nothing)
+        opsoAdapter (organPlanStubOutput r2) `shouldBe` []
+
+    it "emits the C4 ABI adapter for a koka callee with the runtime contract" $
+      withFreshIndex $ \tmp -> do
+        idx <- defaultOrganIndex
+        _ <- ingestPath idx tmp
+        r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_pure" "factorial" (Just "rust") "factorial" "island-factorial" (Just "koka") (Just "kk_island_factorial") (Just "kk_island_factorial"))
+        let out = organPlanStubOutput r
+            adapterTxt = T.unpack (T.unlines (opsoAdapter out))
+        opsoVerdict out `shouldBe` "licensed-with-runtime-checks"
+        adapterTxt `shouldContain` "// ABI adapter: koka island (generated, C4)"
+        adapterTxt `shouldContain` "#include \"factorial.h\""
+        -- The runtime contract the hand-written adapter carried:
+        adapterTxt `shouldContain` "kk_main_start(0, NULL)"
+        adapterTxt `shouldContain` "kk_factorial__init(ctx)"
+        adapterTxt `shouldContain` "kk_factorial__done(ctx)"
+        -- The adapter entry is the trampoline's target; the projection
+        -- calls koka's REAL export (kk_factorial_island_factorial --
+        -- koka replaces '-' with '_'), never the adapter's own name.
+        adapterTxt `shouldContain` "int64_t kk_island_factorial(int64_t n) {"
+        adapterTxt `shouldContain` "kk_factorial_island_factorial(kk_integer_from_int64(n, ctx), ctx)"
+        adapterTxt `shouldSatisfy` not . T.isInfixOf "kk_factorial_kk_island_factorial" . T.pack
+        -- The koka callee-side wrapper documents the delegated contract.
+        T.unpack (opsoCallee out) `shouldContain` "kk_main_start"
 
   where
     sameArgs ta tb =

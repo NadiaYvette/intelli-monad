@@ -874,7 +874,9 @@ data OrganPlanStub = OrganPlanStub
     opsModuleB :: Text,
     opsNameB :: Text,
     opsLangB :: Maybe Text,
-    opsCalleeExport :: Maybe Text
+    opsCalleeExport :: Maybe Text,
+    -- ^ C4: emit the ABI adapter targeting this symbol name.
+    opsCalleeAdapter :: Maybe Text
   }
   deriving (Eq, Show, Generic, JSONSchema, A.FromJSON, A.ToJSON)
 
@@ -891,13 +893,16 @@ instance HasFunctionObject OrganPlanStub where
   getFieldDescription "opsNameB" = "Name of the callee symbol"
   getFieldDescription "opsLangB" = "Optional callee language"
   getFieldDescription "opsCalleeExport" = "The callee island's real entry symbol when it does not follow the module_name convention; the generated trampoline forwards to it"
+  getFieldDescription "opsCalleeAdapter" = "Emit the C4 ABI adapter (projecting the wire's plain int64_t ABI onto the callee island's real ABI) targeting this symbol; supported for koka and haskell islands"
   getFieldDescription _ = ""
 
 data OrganPlanStubOutput = OrganPlanStubOutput
   { opsoVerdict :: Text,
     opsoCaller :: Text,
     opsoCallee :: Text,
-    opsoStubs :: [Text]
+    opsoStubs :: [Text],
+    -- ^ C4: the ABI-adapter section when requested (empty otherwise).
+    opsoAdapter :: [Text]
   }
   deriving (Eq, Show, Generic, A.FromJSON, A.ToJSON)
 
@@ -918,7 +923,7 @@ instance Tool OrganPlanStub where
       return ((,) <$> a <*> b)
     return $ OrganPlanStubOut $ case mside of
       Left problem ->
-        OrganPlanStubOutput "unlicensed-resolve" "" "" ["// STUB REFUSED: unlicensed-resolve", "//   " <> problem]
+        OrganPlanStubOutput "unlicensed-resolve" "" "" ["// STUB REFUSED: unlicensed-resolve", "//   " <> problem] []
       Right ((ta, _ha, la), (tb, _hb, lb)) ->
         case (fnOf ta, fnOf tb) of
           (Just fa, Just fb) ->
@@ -947,18 +952,20 @@ instance Tool OrganPlanStub where
                     -- wrong call.
                     S.srCalleeExport = case args.opsCalleeExport of
                       Just e -> Just e
-                      Nothing -> Just (args.opsModuleB <> "_" <> args.opsNameB)
+                      Nothing -> Just (args.opsModuleB <> "_" <> args.opsNameB),
+                    S.srCalleeAdapter = args.opsCalleeAdapter
                   }
              in case S.planBoundary req of
-                  S.StubRefused v reasons -> OrganPlanStubOutput v "" "" (S.renderCStubs (S.StubRefused v reasons))
+                  S.StubRefused v reasons -> OrganPlanStubOutput v "" "" (S.renderCStubs (S.StubRefused v reasons)) []
                   plan@S.StubPlan {} ->
                     OrganPlanStubOutput
                       (S.spVerdict plan)
                       (T.intercalate "\n" (S.spCallerSide plan))
                       (T.intercalate "\n" (S.spCalleeSide plan))
                       (S.renderCStubs plan)
+                      (fromMaybe [] (S.spAdapter plan))
           _ ->
-            OrganPlanStubOutput "unlicensed-shape" "" "" ["// STUB REFUSED: unlicensed-shape", "//   one side is not a function type; there is no call to glue"]
+            OrganPlanStubOutput "unlicensed-shape" "" "" ["// STUB REFUSED: unlicensed-shape", "//   one side is not a function type; there is no call to glue"] []
     where
       fetchOne conn m n mlang = do
         let sql = case mlang of

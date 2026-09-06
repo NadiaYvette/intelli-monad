@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""C3 gold, stage 1: drive the wire with a Koka callee.
+"""Reverse-direction gold: the refusal, driven over the real wire.
 
-Rust island (std/i64, pure) calls into a Koka island (std/core/int,
-effect row {std/core/div, std/core/exn}) — the direction the C3
-subset rule licenses (caller's row ∅ ⊆ callee's row). The reverse is
-refused by the same rule (exercised in test/StubSpec.hs).
+The C3 gold (drive_koka_wire.py) crosses pure rust -> effectful koka,
+the direction the subset rule licenses. This driver swaps the roles:
+the EFFECTFUL koka island wants to call the PURE rust island. The
+effect-row subset rule must refuse it -- caller <div,exn> is not a
+subset of callee's empty row -- and organ_plan_stub must return
 
-Artifacts land in build-koka/ and nothing is hand-written afterward:
-the callee trampoline comes filled via opsCalleeExport with the
-adapter's entry (kk_island_factorial, see factorial_kk_adapter.c).
+    unlicensed-effect-row
+
+with comment-only debris in the stubs. A refusal here is the feature:
+the same wire, the same islands, the same tool -- the other direction
+cannot be transplanted, and the output says exactly why.
 """
 import argparse
 import json
@@ -19,11 +22,7 @@ import sys
 
 ap = argparse.ArgumentParser()
 ap.add_argument("mcp_serve", help="path to the mcp-serve binary")
-ap.add_argument("--build-dir", default="build-koka")
-ap.add_argument("--adapter", action="store_true",
-                help="C4: also request the generated ABI adapter (opsCalleeAdapter); "
-                     "writes build-dir/kk_adapter.c instead of relying on the "
-                     "hand-written factorial_kk_adapter.c")
+ap.add_argument("--build-dir", default="build-refused")
 args = ap.parse_args()
 
 out = pathlib.Path(args.build_dir)
@@ -65,13 +64,11 @@ def defn(mod, name, ty):
     }
 
 
-# Caller: the rust island, pure over std/i64 (dictionary-known).
+# Same two islands as the C3 gold -- identical qnames, identical
+# effect rows. Only the request direction differs.
 rust = doc("rust", "factorial_rs", [
     defn("factorial_rs", "factorial", fn([], [("std", "i64")], ("std", "i64")))])
 
-# Callee: the koka island, the corpus's real shape — module `factorial`,
-# std/core/int (arbitrary precision, ABI i64-representable) with effect
-# row <div,exn>. Caller row ∅ ⊆ callee row, so the subset rule licenses.
 koka = doc("koka", "factorial", [
     defn("factorial", "island-factorial",
          fn([("std/core", "div"), ("std/core", "exn")],
@@ -97,7 +94,7 @@ def recv():
 
 send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
       "params": {"protocolVersion": "2025-06-18", "capabilities": {},
-                 "clientInfo": {"name": "c3spike", "version": "0"}}})
+                 "clientInfo": {"name": "c3-refused", "version": "0"}}})
 recv()
 send({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
@@ -106,30 +103,31 @@ send({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
 ing = json.loads(recv()["result"]["content"][0]["text"])
 print(f"INGEST: {ing['oiIngested']} ingested, {ing['oiFailed']} failed")
 
-# caller = rust island (pure), callee = koka island (<div,exn>).
-# opsCalleeExport is the ADAPTER's entry — the int64 ABI the filled
-# trampoline calls; the adapter in turn reaches koka's real export.
+# THE REVERSED REQUEST: caller = the koka island (effectful <div,exn>),
+# callee = the rust island (pure). No adapter, no export override: a
+# refused crossing must refuse before any of that matters.
 send({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
       "params": {"name": "organ_plan_stub", "arguments": {
-          "opsModuleA": "factorial_rs", "opsNameA": "factorial", "opsLangA": "rust",
-          "opsModuleB": "factorial", "opsNameB": "island-factorial", "opsLangB": "koka",
-          "opsCalleeExport": "kk_island_factorial",
-          **({"opsCalleeAdapter": "kk_island_factorial"} if args.adapter else {})}}})
+          "opsModuleA": "factorial", "opsNameA": "island-factorial", "opsLangA": "koka",
+          "opsModuleB": "factorial_rs", "opsNameB": "factorial", "opsLangB": "rust"}}})
 plan = json.loads(recv()["result"]["content"][0]["text"])
 p.terminate()
 
 print("VERDICT:", plan["opsoVerdict"])
-(out / "caller.c").write_text(plan["opsoCaller"] + "\n")
-(out / "callee.c").write_text(plan["opsoCallee"] + "\n")
+(out / "refused.c").write_text("\n".join(plan["opsoStubs"]) + "\n")
 (out / "plan.json").write_text(json.dumps(plan, indent=2))
-print("wrote", out / "caller.c")
-print("wrote", out / "callee.c")
-if plan.get("opsoAdapter"):
-    # opsoAdapter is a list of lines; join into one C source file.
-    adapter_lines = plan["opsoAdapter"]
-    adapter_text = adapter_lines if isinstance(adapter_lines, str) else "\n".join(adapter_lines)
-    (out / "kk_adapter.c").write_text(adapter_text + "\n")
-    print("wrote", out / "kk_adapter.c", "(C4 generated ABI adapter)")
-if plan["opsoVerdict"] != "licensed-lossless":
-    print("UNEXPECTED VERDICT — full plan:", json.dumps(plan, indent=2))
-sys.exit(0 if plan["opsoVerdict"] == "licensed-lossless" else 1)
+
+stubs = plan["opsoStubs"]
+comment_only = all(s.startswith("//") for s in stubs)
+print("comment-only debris:", comment_only)
+for line in stubs:
+    if "caller requires effects" in line or "caller row:" in line:
+        print("  ", line)
+
+ok = (plan["opsoVerdict"] == "unlicensed-effect-row"
+      and plan["opsoCaller"] == "" and plan["opsoCallee"] == ""
+      and comment_only
+      and any("std/core/exn" in s for s in stubs)
+      and any("subset" in s for s in stubs))
+print("REFUSAL AS PREDICTED" if ok else "UNEXPECTED PLAN — see plan.json")
+sys.exit(0 if ok else 1)

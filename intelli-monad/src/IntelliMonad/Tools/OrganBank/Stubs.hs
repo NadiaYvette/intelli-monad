@@ -24,7 +24,10 @@
 -- the empty row.
 --
 -- Scope: scalar numeric crossings emit real conversions; boxed values
--- (arbitrary precision, dynamic) render as @void *@ handles. The
+-- (arbitrary precision, dynamic) render as @void *@ handles (the C4
+-- dictionary adds 'IntelliMonad.Tools.OrganBank.Dictionary.FBigSigned' and
+-- 'IntelliMonad.Tools.OrganBank.Dictionary.FBigUnsigned' so an unbounded-
+-- domain crossing is refused, not under-modeled). The
 -- callee side either leaves the trampoline to fill (when the island's
 -- real entry point is unknown) or emits the filled forwarding
 -- trampoline when 'srCalleeExport' names it — the C2 spike's finding:
@@ -61,7 +64,8 @@ data Position = Position
 
 -- | A crossing to plan: two named symbols, the positions of their
 -- shared signature, the two sides' effect rows (rendered qnames), and
--- optionally the callee island's real entry symbol.
+-- optionally the callee island's real entry symbol plus an explicit
+-- ABI-adapter target name (C4).
 data StubRequest = StubRequest
   { srCaller :: Text
   , srCallee :: Text
@@ -69,6 +73,9 @@ data StubRequest = StubRequest
   , srCallerEffects :: [Text]
   , srCalleeEffects :: [Text]
   , srCalleeExport :: Maybe Text
+  , srCalleeAdapter :: Maybe Text
+    -- ^ Symbol name for the generated ABI adapter (the plain @int64_t@
+    -- projection the trampoline calls); @Nothing@ emits no adapter.
   }
   deriving (Eq, Show)
 
@@ -82,6 +89,10 @@ data StubPlan
       , spCallerSide :: [Text]
       , spCalleeSide :: [Text]
       , spMarshal :: [Text]
+      , spAdapter :: Maybe [Text]
+        -- ^ The C4 ABI-adapter section (projecting the wire's plain
+        -- @int64_t@ ABI onto the callee island's real ABI), when
+        -- requested and supported. Nothing = no adapter for this plan.
       }
   deriving (Eq, Show)
 
@@ -115,6 +126,7 @@ planBoundary req =
                 { spVerdict = v
                 , spCallerSide = callerLines req perPos
                 , spCalleeSide = calleeLines req perPos
+                , spAdapter = emitAdapter req
                 , spMarshal =
                     [posLabel p <> ": " <> conversionNote (posFrom p) (posTo p) | (p, _) <- perPos]
                       <> [ effectNote (srCallerEffects req) (srCalleeEffects req)
@@ -145,7 +157,10 @@ conversionNote :: Member -> Member -> Text
 conversionNote from to = case (mFamily from, mFamily to, mWidth from, mWidth to) of
   (FDynamic, _, _, _) -> "runtime-check shape and range, then cast"
   (_, FDynamic, _, _) -> "runtime-check shape and range, then cast"
-  (FBigInt, FBigInt, _, _) -> "box swap between island allocators (C2)"
+  (FBigSigned, FBigSigned, _, _) -> "box swap between island allocators (C4)"
+  (FBigUnsigned, FBigUnsigned, _, _) -> "box swap between island allocators (C4)"
+  (FBigSigned, FBigUnsigned, _, _) -> "unreachable: the negative domain is refused at plan time"
+  (FBigUnsigned, FBigSigned, _, _) -> "zero-extend the nat into the signed bigint box"
   (FSigned, FSigned, Just a, Just b)
     | a == b -> "pass through unchanged"
     | a < b -> "sign-extend " <> bits a <> " to " <> bits b
@@ -274,6 +289,106 @@ calleeLines req perPos =
               ]
             | calleeLang == "haskell"
             ]
+          <> concat
+            [ [ "/* koka islands: the ABI adapter owns the runtime contract — init the RTS"
+              , "   (kk_main_start + module init chain) inside its setup entry, then call"
+              , "   the island through koka's real kk_integer_t + kk_context_t* ABI. */"
+              ]
+            | calleeLang == "koka"
+            ]
+
+-- | The C4 ABI adapter (callee side): projects the wire's plain
+-- @int64_t@ ABI onto the callee island's real ABI, so the generated
+-- trampoline never depends on hand-written projection code. Emitted
+-- only when the request names an adapter target and the callee
+-- language has a known projection; the emitters are total over the
+-- two languages the gold loops exercise (koka, haskell).
+--
+-- Everything is keyed on the /callee language/ of 'srCallee' — not on
+-- members — because the projection is a property of the island's
+-- runtime, not of the scalar positions (koka's @kk_integer_t@ +
+-- @kk_context_t*@, GHC's @StgInt@ via its own generated capi header).
+emitAdapter :: StubRequest -> Maybe [Text]
+emitAdapter req = case (calleeLang, srCalleeExport req, srCalleeAdapter req) of
+  ("koka", Just entry, Just _) ->
+    Just $
+      [ "// ABI adapter: koka island (generated, C4)"
+      , "// Projects the wire's plain int64_t ABI onto koka's real one --"
+      , "// kk_integer_t values plus a kk_context_t* -- and owns the koka"
+      , "// runtime contract: kk_main_start + the module init chain before"
+      , "// the first crossing, module done before exit. The generated koka"
+      , "// module's init/done are statically guarded and idempotent; we"
+      , "// guard the RTS start ourselves too."]
+      <>
+      [ "#include <stdint.h>"
+      , "#include <kklib.h>"
+      , "/* The generated koka header (koka -c -l) declares the real export"
+      , "   and the module init/done pair; include it rather than"
+      , "   re-declaring, so this adapter cannot drift from the ABI. */"
+      , "#include \"" <> headerName <> "\""
+      , ""
+      , "static int omni_kk_rts_up = 0;"
+      , "void " <> setupEntry <> "(void) {"
+      , "  if (omni_kk_rts_up) return;"
+      , "  omni_kk_rts_up = 1;"
+      , "  kk_context_t* ctx = kk_main_start(0, NULL);"
+      , "  kk_" <> kokaModule <> "__init(ctx);"
+      , "}"
+      , ""
+      , "void " <> teardownEntry <> "(void) {"
+      , "  kk_context_t* ctx = kk_get_context();"
+      , "  kk_" <> kokaModule <> "__done(ctx);"
+      , "}"
+      , ""
+      , "int64_t " <> entry' <> "(int64_t n) {"
+      , "  kk_context_t* ctx = kk_get_context();"
+      , "  return kk_smallint_from_integer("
+      , "      " <> realExport <> "(kk_integer_from_int64(n, ctx), ctx));"
+      , "}"
+      ]
+    where
+      entry' = sanitizeIsland entry
+      headerName = kokaModule <> ".h"
+      setupEntry = "omni_kk_" <> kokaModule <> "_island_init"
+      teardownEntry = "omni_kk_" <> kokaModule <> "_island_done"
+      realExport = "kk_" <> kokaModule <> "_" <> sanitizeIsland kokaValue
+  ("haskell", Just entry, Just _) ->
+    Just $
+      [ "// ABI adapter: GHC island (generated, C4)"
+      , "#include <stdint.h>"
+      , "/* GHC emits a capi header per module (ghc -c keeps it next to the"
+      , "   object: <Module>_api.h); include it rather than re-declaring the"
+      , "   export, so the target-defined StgInt spelling comes from GHC"
+      , "   itself. The RTS contract -- hs_init before the first crossing,"
+      , "   hs_exit after the last -- stays with the host, which links via"
+      , "   ghc -no-hs-main. */"
+      , "#include \"" <> hsModule <> "_api.h\""
+      , ""
+      , "int64_t " <> sanitizeIsland entry <> "(int64_t n) {"
+      , "  return (int64_t) " <> hsModule <> "_" <> hsValue <> "((" <> hsArgType <> ") n);"
+      , "}"
+      ]
+  -- Fail-closed: no export to project onto, no adapter request, or a
+  -- language without a known projection keeps the one-line FFI export
+  -- convention from C2/C3.
+  _ -> Nothing -- other languages keep the one-line FFI export convention
+  where
+    calleeLang = T.takeWhile (/= ':') (srCallee req)
+    sanitizeIsland = T.map (\c -> if isAlphaNum c then c else '_')
+    -- Strip the "lang:" prefix from the callee qname before deriving
+    -- module/value names (koka: and haskell: are not 2 chars).
+    stripLang r = T.drop 1 (T.dropWhile (/= ':') r)
+    -- koka derives the module name from the source path (run_koka.sh
+    -- compiles factorial.kk from the build dir => module "factorial")
+    -- and value names replace '-' with '_' in the exported C symbol.
+    (kdir, kokaValue) = T.breakOnEnd "/" (stripLang (srCallee req))
+    kokaModule = T.dropEnd 1 kdir
+    -- GHC: module and name from the callee qname; the island export is
+    -- the convention prediction Module_name (islands with custom export
+    -- names alias it with a one-line foreign export).
+    (hdir, hsValue) = T.breakOnEnd "/" (stripLang (srCallee req))
+    hsModule = T.dropEnd 1 hdir
+    hsArgType = "HsInt64"
 
 -- | Shared signature line, side-aware. The caller wrapper receives
 -- /caller-typed/ arguments (posFrom) and returns the caller's result
@@ -300,13 +415,26 @@ renderCStubs (StubRefused v reasons) =
   ]
     <> ["//   " <> r | r <- reasons]
     <> ["// a stub generator must refuse to emit code for unlicensed crossings"]
-renderCStubs plan@StubPlan {} =
-  spCallerSide plan
-    <> [""]
-    <> ["// marshal notes:"]
-    <> ["//   " <> m | m <- spMarshal plan]
-    <> [""]
-    <> spCalleeSide plan
+renderCStubs plan@StubPlan {}
+  -- C4: the ABI-adapter section (when emitted) trails the callee side
+  -- — the last box to compile, right where the island's own runtime
+  -- contract lives.
+  | Just adapterLines <- spAdapter plan =
+      spCallerSide plan
+        <> [""]
+        <> ["// marshal notes:"]
+        <> ["//   " <> m | m <- spMarshal plan]
+        <> [""]
+        <> spCalleeSide plan
+        <> [""]
+        <> adapterLines
+  | otherwise =
+      spCallerSide plan
+        <> [""]
+        <> ["// marshal notes:"]
+        <> ["//   " <> m | m <- spMarshal plan]
+        <> [""]
+        <> spCalleeSide plan
 
 -- | Fixture pair 1: Haskell @Int#@ crossing into Rust @i64@ and back.
 -- Licensed lossless (64-bit signed both ways). Effectless both sides.
@@ -321,7 +449,8 @@ fixtureHaskellRust =
         ],
       srCallerEffects = [],
       srCalleeEffects = [],
-      srCalleeExport = Nothing
+      srCalleeExport = Nothing,
+      srCalleeAdapter = Nothing
     }
 
 -- | Fixture pair 2: C @int32@ widened into Rust @i64@ on the argument,
@@ -337,5 +466,6 @@ fixtureCWidened =
         ],
       srCallerEffects = [],
       srCalleeEffects = [],
-      srCalleeExport = Nothing
+      srCalleeExport = Nothing,
+      srCalleeAdapter = Nothing
     }

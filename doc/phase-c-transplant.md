@@ -216,5 +216,68 @@ encoding: unboxed smallints carry a 63-bit payload (KK_TAG_BITS = 1
 over a 64-bit `kk_intf_t`), and `int` is *arbitrary precision* via
 heap bigints beyond that. Every int64 value is representable, so the
 member width stays 64 and the citation now states the real encoding;
-the FBig (arbitrary-precision) member family is an explicit TODO for
-crossings where a partner type cannot hold the full range.
+the FBig (arbitrary-precision) member family has since landed — see
+the FBig section below.
+
+## Generated ABI adapters, the wire refusal demo, and the FBig families (2026-09-06)
+
+Three hardening milestones landed after the C3 gold (distinct from the
+C4 PMWA milestone defined above — this is spike-era hardening, not the
+per-pair verification criterion):
+
+### 1. Generator-emitted ABI adapters
+
+`renderCStubs` can now emit the island-side ABI projection itself —
+the file the C3 gold still hand-wrote. `emitAdapter` produces, per
+request (`srCalleeAdapter = Just <entry>`):
+
+- **koka islands**: a C adapter that includes the compiler-generated
+  `factorial.h` (never re-declares the ABI), owns the koka runtime
+  contract (`kk_main_start` + the statically-guarded module init/done
+  pair), and projects `int64_t ↔ kk_integer_t` via
+  `kk_integer_from_int64` / `kk_smallint_from_integer`. Lifecycle
+  symbols are namespaced `omni_kk_<module>_island_init/done` —
+  deterministic from the module name and collision-safe when several
+  generated adapters link into one host.
+- **GHC islands**: includes the compiler's capi header
+  (`<Module>_api.h`) so `StgInt`'s target spelling comes from GHC
+  itself, and casts through `HsInt64`. The RTS contract (`hs_init` /
+  `hs_exit`) deliberately stays with the host, which links via
+  `ghc -no-hs-main`.
+- **Anything else**: `Nothing` — fail-closed, keeping the one-line FFI
+  export convention from C2/C3.
+
+The adapter is gated on an explicit request (`srCalleeAdapter`); the
+default plan stays byte-identical to C2/C3 output.
+
+**The C4-era gold loop** (`examples/c2-spike/run_koka_generated.sh`)
+links a rust island → wire glue → filled trampoline → *generated*
+koka adapter → real koka island with zero hand-written glue; the C3
+hand-written adapter becomes a reviewed diff against the generated
+one (`host_koka_gen.c` is the only new hand file, and it only
+declares the namespaced lifecycle symbols).
+
+### 2. Reverse-direction refusal, over the real wire
+
+`examples/c2-spike/run_refused.sh` drives the refusal direction
+through the real `mcp-serve` binary (previously only pinned in unit
+tests): the effectful koka island asks to call the pure rust island
+and `organ_plan_stub` returns `unlicensed-effect-row` with comment-only
+debris explaining the subset rule — no callable code is emitted.
+
+### 3. FBig member families (arbitrary-precision domains)
+
+The dictionary gains `FBigSigned` / `FBigUnsigned` member families for
+genuinely arbitrary-precision types (koka `int`'s bigint spill beyond
+the 63-bit smallint payload, GHC `Integer`, ...):
+
+- same-family crossings license as `licensed-lossless` (a box swap,
+  with the unsigned→signed zero-extend note);
+- bigint ↔ fixed-width is a `unlicensed-representation` refusal —
+  a *representation* mismatch, never a width guess;
+- the koka `int` ABI entry stays `FSigned(64)` (every int64 is
+  representable), which the C3 gold depends on;
+- Lean4/Agda `Nat` are `FBigUnsigned`, so bigint-signed ↔ `Nat`
+  refuses as `overflow-domain` (negatives do not transfer).
+
+This retires the "FBig TODO" note at the end of the C3 section.

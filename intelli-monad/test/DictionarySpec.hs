@@ -39,7 +39,8 @@ spec = do
       -- The honest entries: implementation-defined precision.
       fmap mWidth (memberOf "sml" "Basis" "int") `shouldBe` Just Nothing
       fmap mWidth (memberOf "mercury" "std" "int") `shouldBe` Just Nothing
-      fmap mFamily (memberOf "lean4" "Lean" "Nat") `shouldBe` Just FBigInt
+      fmap mFamily (memberOf "lean4" "Lean" "Nat") `shouldBe` Just FBigUnsigned
+      fmap mFamily (memberOf "koka" "std/core" "integer") `shouldBe` Just FBigSigned
 
     it "is case-insensitive on the language" $
       fmap mFamily (memberOf "Haskell" "ghc-prim" "Int#") `shouldBe` Just FSigned
@@ -85,6 +86,24 @@ spec = do
     it "refuses implementation-defined precision (no range axiom)" $ do
       let (v, _) = license (Member FSigned Nothing "sml int") (m FSigned (Just 64) "")
       v `shouldBe` "unlicensed-range"
+
+    it "licenses bigint pairs by domain: signed->signed lossless, signed->Nat refused, Nat->signed lossless" $ do
+      let (vSS, _) = license (Member FBigSigned Nothing "a") (Member FBigSigned Nothing "b")
+          (vSU, axSU) = license (Member FBigSigned Nothing "a") (Member FBigUnsigned Nothing "b")
+          (vUS, _) = license (Member FBigUnsigned Nothing "a") (Member FBigSigned Nothing "b")
+      vSS `shouldBe` "licensed-lossless"
+      vSU `shouldBe` "unlicensed-overflow-domain"
+      any ("below zero" `T.isInfixOf`) axSU `shouldBe` True
+      vUS `shouldBe` "licensed-lossless"
+
+    it "refuses bigint against fixed-width as a representation mismatch (never a width guess)" $ do
+      let (v1, ax1) = license (Member FBigSigned Nothing "arbitrary") (m FSigned (Just 64) "")
+          (v2, _) = license (m FSigned (Just 64) "") (Member FBigSigned Nothing "arbitrary")
+          (v3, _) = license (Member FBigUnsigned Nothing "arbitrary") (m FUnsigned (Just 32) "")
+      v1 `shouldBe` "unlicensed-representation"
+      any ("unbounded" `T.isInfixOf`) ax1 `shouldBe` True
+      v2 `shouldBe` "unlicensed-representation"
+      v3 `shouldBe` "unlicensed-representation"
 
     it "admits dynamic sides only with runtime checks" $ do
       let (v1, _) = license (m FDynamic Nothing "") (m FSigned (Just 64) "")
