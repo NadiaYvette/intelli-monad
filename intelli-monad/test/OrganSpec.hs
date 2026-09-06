@@ -320,7 +320,7 @@ spec = do
         idx <- defaultOrganIndex
         _ <- ingestPath idx tmp
         r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
-          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "Factorial" "factorial" (Just "haskell") "factorial_rs" "factorial" (Just "rust"))
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "Factorial" "factorial" (Just "haskell") "factorial_rs" "factorial" (Just "rust") (Just "rs_island_fac"))
         let out = organPlanStubOutput r
         -- Both fixtures use the synthetic std/int qname, which has no
         -- dictionary axiom: memberFor falls back to the dynamic member
@@ -329,6 +329,9 @@ spec = do
         opsoVerdict out `shouldBe` "licensed-with-runtime-checks"
         T.unpack (opsoCaller out) `shouldContain` "omni_haskell_Factorial_factorial"
         T.unpack (opsoCallee out) `shouldContain` "omni_rust_factorial_rs_factorial"
+        -- The explicit island-entry override flows into the filled
+        -- trampoline (C2), addressed by its own name.
+        T.unpack (opsoCallee out) `shouldContain` "rs_island_fac"
         opsoStubs out `shouldContain` ["// marshal notes:"]
 
     it "refuses a real unlicensed crossing (rust i64 result into ocaml's 63-bit int)" $
@@ -336,7 +339,7 @@ spec = do
         idx <- defaultOrganIndex
         _ <- ingestPath idx tmp
         r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
-          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_oc" "factorial" (Just "ocaml") "factorial_rs" "factorial" (Just "rust"))
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_oc" "factorial" (Just "ocaml") "factorial_rs" "factorial" (Just "rust") Nothing)
         let out = organPlanStubOutput r
         -- The result flows callee→caller: rust std/i64 (64 bits) into
         -- OCaml's 63-bit tagged int is a genuine narrowing.
@@ -349,7 +352,7 @@ spec = do
         idx <- defaultOrganIndex
         _ <- ingestPath idx tmp
         r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
-          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "Missing" "factorial" Nothing "factorial_rs" "factorial" (Just "rust"))
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "Missing" "factorial" Nothing "factorial_rs" "factorial" (Just "rust") Nothing)
         let out = organPlanStubOutput r
         opsoVerdict out `shouldBe` "unlicensed-resolve"
         any ("Symbol not in the index" `T.isInfixOf`) (opsoStubs out) `shouldBe` True

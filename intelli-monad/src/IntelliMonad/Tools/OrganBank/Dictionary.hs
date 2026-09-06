@@ -133,8 +133,16 @@ table =
         [ (("purescript", "Prim/Int"), Member FSigned (Just 32) "PureScript docs: Int is a 32-bit integer"),
           (("purescript", "Prim/Number"), Member FFloat (Just 64) "PureScript docs: Number is IEEE-754 double")
         ],
-        -- Koka: std/core/int is 64-bit.
-        [ (("koka", "std/core/int"), Member FSigned (Just 64) "Koka docs: int is 64-bit two's complement"),
+        -- Koka: `int` is arbitrary precision — unboxed smallints carry a
+        -- 63-bit payload (kklib.h: KK_TAG_BITS = 1 over a 64-bit kk_intf_t)
+        -- and values beyond spill to heap bigints. Every int64 value is
+        -- representable, so the ABI licenses i64↔koka losslessly for the
+        -- fixed-width scalar range (the spike's domain); the marshal notes
+        -- carry the spill caveat. Values *outside* int64 range are real for
+        -- koka but unrepresentable in a fixed-width partner — the dictionary
+        -- has no FBig member family yet (TODO), so such crossings are
+        -- currently under-modeled rather than refused.
+        [ (("koka", "std/core/int"), Member FSigned (Just 64) "Koka kklib.h: int is arbitrary precision; unboxed smallint payload is 63 bits (KK_TAG_BITS=1), full int64 range representable via heap bigints"),
           (("koka", "std/core/float64"), Member FFloat (Just 64) "Koka docs: float64 IEEE-754 double")
         ],
         -- Fortran: gfortran default INTEGER is kind=4 (32 bits); the

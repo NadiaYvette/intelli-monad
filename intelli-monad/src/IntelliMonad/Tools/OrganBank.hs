@@ -873,7 +873,8 @@ data OrganPlanStub = OrganPlanStub
     opsLangA :: Maybe Text,
     opsModuleB :: Text,
     opsNameB :: Text,
-    opsLangB :: Maybe Text
+    opsLangB :: Maybe Text,
+    opsCalleeExport :: Maybe Text
   }
   deriving (Eq, Show, Generic, JSONSchema, A.FromJSON, A.ToJSON)
 
@@ -889,6 +890,7 @@ instance HasFunctionObject OrganPlanStub where
   getFieldDescription "opsModuleB" = "Module of the callee symbol"
   getFieldDescription "opsNameB" = "Name of the callee symbol"
   getFieldDescription "opsLangB" = "Optional callee language"
+  getFieldDescription "opsCalleeExport" = "The callee island's real entry symbol when it does not follow the module_name convention; the generated trampoline forwards to it"
   getFieldDescription _ = ""
 
 data OrganPlanStubOutput = OrganPlanStubOutput
@@ -934,7 +936,18 @@ instance Tool OrganPlanStub where
                 req = S.StubRequest
                   { S.srCaller = la <> ":" <> args.opsModuleA <> "/" <> args.opsNameA,
                     S.srCallee = lb <> ":" <> args.opsModuleB <> "/" <> args.opsNameB,
-                    S.srPositions = positions
+                    S.srPositions = positions,
+                    S.srCallerEffects = effectsOf ta,
+                    S.srCalleeEffects = effectsOf tb,
+                    -- The island's real entry point: the explicit
+                    -- override, else the module_name convention (the
+                    -- definition's own qname, un-prefixed — bridge
+                    -- symbols are a namespace of their own). A wrong
+                    -- prediction is a link-time error, never a silent
+                    -- wrong call.
+                    S.srCalleeExport = case args.opsCalleeExport of
+                      Just e -> Just e
+                      Nothing -> Just (args.opsModuleB <> "_" <> args.opsNameB)
                   }
              in case S.planBoundary req of
                   S.StubRefused v reasons -> OrganPlanStubOutput v "" "" (S.renderCStubs (S.StubRefused v reasons))
@@ -982,6 +995,17 @@ instance Tool OrganPlanStub where
       resOf fn = case fn of
         A.Object o -> KM.lookup "result" o
         _ -> Nothing
+      -- Effect qnames of a fn/forall type, rendered ("std/core/div").
+      -- fnOf already unwraps forall bodies.
+      effectsOf v = case fnOf v of
+        Just fn -> case fn of
+          A.Object o -> case KM.lookup "effect" o of
+            Just row -> case effectRowText row of
+              "" -> []
+              t -> T.splitOn "," t
+            _ -> []
+          _ -> []
+        Nothing -> []
 
 -- | Input for 'organ_diagnostics'.
 data OrganDiagnostics = OrganDiagnostics ()

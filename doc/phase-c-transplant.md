@@ -157,3 +157,64 @@ still emits the `/* C2: trampoline */` placeholder. C2's remaining
 work is to make `renderCStubs` emit the filled form given the callee
 island's real export name, plus an RTS-init contract (which island
 calls `hs_init`, and when) for GHC-hosted processes.
+
+## C3 gold: the Koka effect-row crossing, compiled and run (2026-09-06)
+
+`examples/c2-spike/run_koka.sh` closes the C3 milestone with a live
+loop in the direction the subset rule *licenses*: a pure rust island
+(`std/i64`, caller row ∅) calls a real koka island (`std/core/int`,
+effect row `<div,exn>`), both through the wire:
+
+```
+INGEST: 2 ingested, 0 failed
+VERDICT: licensed-lossless
+C host -> wire glue -> koka island:      5! = 120 ok
+rust island -> wire glue -> koka island: 6! = 720 ok
+adapter direct:                          7! = 5040 ok
+```
+
+The reverse direction (effectful caller → pure callee) stays refused by
+`planBoundary`'s `unlicensed-effect-row` verdict — pinned in
+`test/StubSpec.hs`.
+
+### What the gold taught (recipes now in run_koka.sh)
+
+- **Koka's C ABI is `kk_integer_t` + `kk_context_t*`**, so the island
+  needs an *adapter* (like the GHC island needs its Haskell-side
+  projection): `factorial_kk_adapter.c` owns `int64 → kk_integer_t`
+  (`kk_integer_from_int64` / `kk_smallint_from_integer`), includes the
+  compiler-generated `factorial.h` instead of re-declaring symbols, and
+  exposes `kk_island_factorial(int64_t)` — the name passed as
+  `opsCalleeExport`, which the filled trampoline then calls.
+- **Koka's init contract**: `kk_main_start` → module init chain
+  (`kk_factorial__init`, statically guarded + idempotent) → calls →
+  `kk_factorial__done`. Unlike GHC, koka does **not** need to be the
+  process main: the gold links with plain `gcc` while GHC's loop needs
+  `ghc -no-hs-main`.
+- **Compile flags are part of the ABI.** kklib must be compiled
+  exactly as koka compiles it or the ABI tears: `kklib.h` leaks
+  `mi_heap_t` into `kk_context_t` under `KK_MIMALLOC`, so adapter/host
+  TUs need `-DKK_MIMALLOC=8` *and* the mimalloc include dir;
+  `KK_COMP_VERSION`/`KK_CC_NAME` are quoted C string literals
+  (`'-DKK_COMP_VERSION="3.2.3"'`). The runtime itself is kklib's
+  `src/all.c` compiled to one `kklib.o` (library mode `-l` does *not*
+  emit it). The recipe was captured byte-faithfully with a `--cc`
+  wrapper shim rather than reconstructed.
+- **`koka -c -l` (library mode)** compiles the module + std_core*.o
+  without a `main` trampoline, but still *typechecks* a main; the
+  island carries a never-called `dummy-main`. Koka derives the module
+  name from the source *path* — compile from a relative filename or
+  the symbols become `examples_c2_spike_factorial_*`.
+- **Koka's reader is UTF-8-strict** and its comments are `//` (not
+  `--`): em-dashes in comments fail the build.
+
+### Dictionary accuracy: koka std/core/int
+
+The dictionary entry previously claimed "int is 64-bit two's
+complement" — wrong in mechanism, right in range. kklib's actual
+encoding: unboxed smallints carry a 63-bit payload (KK_TAG_BITS = 1
+over a 64-bit `kk_intf_t`), and `int` is *arbitrary precision* via
+heap bigints beyond that. Every int64 value is representable, so the
+member width stays 64 and the citation now states the real encoding;
+the FBig (arbitrary-precision) member family is an explicit TODO for
+crossings where a partner type cannot hold the full range.

@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | C1 of the Phase C transplant plan (@doc/phase-c-transplant.md@):
--- the stub generator skeleton. Pure, diff-able, no compiler invoked.
+-- | C1/C2 of the Phase C transplant plan (@doc/phase-c-transplant.md@):
+-- the stub generator. Pure, diff-able, no compiler invoked.
 --
 -- A 'StubRequest' describes a crossing the representation dictionary
 -- can judge. 'planBoundary' re-runs the licensing (same axioms, same
@@ -17,10 +17,18 @@
 -- caller→callee and the result position callee→caller, exactly as
 -- @organ_check_boundary@ licenses them.
 --
--- C1 scope: scalar numeric crossings emit real conversions; boxed
--- values (arbitrary precision, dynamic) render as @void *@ handles
--- with a note that C2 owns the box representation. Nothing here
--- compiles or links — that is milestone C2.
+-- Effect discipline (C3): a crossing must satisfy the effect-row
+-- subset rule — the caller's effect row must be a subset of the
+-- callee's. A call may add obligations for the callee; it may never
+-- demand powers the callee lacks. Pure rows (@std/pure@) normalize to
+-- the empty row.
+--
+-- Scope: scalar numeric crossings emit real conversions; boxed values
+-- (arbitrary precision, dynamic) render as @void *@ handles. The
+-- callee side either leaves the trampoline to fill (when the island's
+-- real entry point is unknown) or emits the filled forwarding
+-- trampoline when 'srCalleeExport' names it — the C2 spike's finding:
+-- bridge symbols and island exports are separate namespaces.
 module IntelliMonad.Tools.OrganBank.Stubs
   ( Position (..)
   , StubRequest (..)
@@ -51,12 +59,16 @@ data Position = Position
   }
   deriving (Eq, Show)
 
--- | A crossing to plan: two named symbols and the positions of their
--- shared signature.
+-- | A crossing to plan: two named symbols, the positions of their
+-- shared signature, the two sides' effect rows (rendered qnames), and
+-- optionally the callee island's real entry symbol.
 data StubRequest = StubRequest
   { srCaller :: Text
   , srCallee :: Text
   , srPositions :: [Position]
+  , srCallerEffects :: [Text]
+  , srCalleeEffects :: [Text]
+  , srCalleeExport :: Maybe Text
   }
   deriving (Eq, Show)
 
@@ -73,27 +85,59 @@ data StubPlan
       }
   deriving (Eq, Show)
 
--- | Plan a crossing. Aggregation is the dictionary's weakest link;
--- any @unlicensed-*@ aggregate refuses the whole request.
+-- | Plan a crossing. Checks, in priority order: the degenerate
+-- empty request, the effect-row subset rule (caller ⊆ callee), then
+-- the dictionary's weakest-link licensing. When both sides carry
+-- effect rows, the marshal notes gain the licensed row relation.
 planBoundary :: StubRequest -> StubPlan
 planBoundary req =
   let perPos = [(p, license (posFrom p) (posTo p)) | p <- srPositions req]
       verdicts = [v | (_, (v, _)) <- perPos]
       aggregated = aggregate verdicts
       axiomLines = concat [lns | (_, (_, lns)) <- perPos]
-   in case aggregated of
-        Nothing ->
+      callerRow = normalizeRow (srCallerEffects req)
+      calleeRow = normalizeRow (srCalleeEffects req)
+      missing = [e | e <- callerRow, e `notElem` calleeRow]
+   in case (aggregated, missing) of
+        (Nothing, _) ->
           StubRefused "unlicensed-empty"
             ["no positions to license: a crossing needs at least one value flow"]
-        Just v
+        (_, _ : _) ->
+          StubRefused "unlicensed-effect-row"
+            [ "caller requires effects the callee does not provide: " <> T.intercalate ", " missing
+            , "effect-row rule: caller's row must be a subset of the callee's — a call may add obligations for the callee, never demand powers the callee lacks"
+            , "caller row: " <> showRow callerRow <> " | callee row: " <> showRow calleeRow
+            ]
+        (Just v, [])
           | "unlicensed" `T.isPrefixOf` v -> StubRefused v axiomLines
           | otherwise ->
               StubPlan
                 { spVerdict = v
                 , spCallerSide = callerLines req perPos
                 , spCalleeSide = calleeLines req perPos
-                , spMarshal = [posLabel p <> ": " <> conversionNote (posFrom p) (posTo p) | (p, _) <- perPos]
+                , spMarshal =
+                    [posLabel p <> ": " <> conversionNote (posFrom p) (posTo p) | (p, _) <- perPos]
+                      <> [ effectNote (srCallerEffects req) (srCalleeEffects req)
+                         | not (null (srCallerEffects req)) || not (null (srCalleeEffects req))
+                         ]
                 }
+
+-- | Drop pure markers: @std/pure@ (and any qname whose name component
+-- is @pure@) is the empty row. The last path component is the name.
+normalizeRow :: [Text] -> [Text]
+normalizeRow = filter (\e -> T.toLower (last (T.splitOn "/" e)) /= "pure")
+
+-- | Render a normalized row for notes/refusals; the empty row is ∅.
+showRow :: [Text] -> Text
+showRow [] = "∅"
+showRow es = T.intercalate ", " es
+
+-- | The licensed effect-row relation, as a marshal note. Rendered from
+-- the /raw/ rows so the pure markers stay visible provenance.
+effectNote :: [Text] -> [Text] -> Text
+effectNote rawCaller rawCallee =
+  "effect row: caller {" <> showRow (normalizeRow rawCaller)
+    <> "} ⊆ callee {" <> showRow (normalizeRow rawCallee) <> "}"
 
 -- | Per-position conversion note. Real conversions for the scalar
 -- cases C1 covers; box notes for the cases C2 must own.
@@ -180,7 +224,11 @@ verdictOf perPos = case aggregate [v | (_, (v, _)) <- perPos] of
   Nothing -> "unlicensed-empty"
 
 -- | The callee-side island wrapper: the exported symbol matching the
--- @extern@ the caller declared, converting back on return.
+-- @extern@ the caller declared. When the island's real entry point is
+-- known ('srCalleeExport'), the trampoline is emitted /filled/ — pure
+-- forwarding plus the GHC RTS contract when the island is Haskell.
+-- When unknown, the body stays an explicit C2 placeholder: never
+-- invent an entry point.
 calleeLines :: StubRequest -> [(Position, (Text, [Text]))] -> [Text]
 calleeLines req perPos =
   [ "// callee-side island wrapper for " <> srCallee req
@@ -188,9 +236,44 @@ calleeLines req perPos =
   , "#include <stdint.h>"
   ]
     <> [signature req perPos False]
-    <> [ "  /* C2: trampoline into the callee island's runtime */"
-       , "}"
-       ]
+    <> body
+  where
+    args = [p | p@Position {} <- srPositions req, isArg p]
+    isArg p = posLabel p /= "result"
+    result = [p | p <- srPositions req, posLabel p == "result"]
+    argNames = ["a" <> T.pack (show i) | (i, _) <- zip [0 :: Int ..] args]
+    calleeLang = T.takeWhile (/= ':') (srCallee req)
+    export = safeIdentExport <$> srCalleeExport req
+    -- The island entry is addressed by its own name (bridge symbols
+    -- are a namespace of their own — never prefix an island export).
+    safeIdentExport t = T.map (\c -> if isAlphaNum c then c else '_') t
+    retCast = case result of
+      (p : _) -> "(" <> cTypeOf (posFrom p) <> ") "
+      [] -> ""
+    callLine e =
+      "  return " <> retCast <> e <> "(" <> T.intercalate ", " argNames <> ");"
+    body = case export of
+      Nothing -> [ "  /* C2: trampoline into the callee island's runtime — */"
+                 , "  /*    provide the island's real entry point to fill this */"
+                 , "}" ]
+      Just e ->
+        [ "  extern " <> islandRet <> " " <> e <> "(" <> T.intercalate ", " [cTypeOf (posTo p) <> " " <> n | (p, n) <- zip args argNames] <> ");"
+        , "  /* trampoline: forward to the island's entry " <> e <> " */"
+        , callLine e
+        , "}"
+        ]
+        where
+          -- The island entry has the callee's ABI: callee-typed params
+          -- and the callee's result type (posFrom of the result).
+          islandRet = case result of
+            (p : _) -> cTypeOf (posFrom p)
+            [] -> "void"
+          <> concat
+            [ [ "/* GHC islands: the host must call hs_init before the first crossing and"
+              , "   hs_exit after the last; this wrapper assumes that contract. */"
+              ]
+            | calleeLang == "haskell"
+            ]
 
 -- | Shared signature line, side-aware. The caller wrapper receives
 -- /caller-typed/ arguments (posFrom) and returns the caller's result
@@ -226,7 +309,7 @@ renderCStubs plan@StubPlan {} =
     <> spCalleeSide plan
 
 -- | Fixture pair 1: Haskell @Int#@ crossing into Rust @i64@ and back.
--- Licensed lossless (64-bit signed both ways).
+-- Licensed lossless (64-bit signed both ways). Effectless both sides.
 fixtureHaskellRust :: StubRequest
 fixtureHaskellRust =
   StubRequest
@@ -235,7 +318,10 @@ fixtureHaskellRust =
       srPositions =
         [ Position "arg 0" (Member FSigned (Just 64) "ghc-prim/Int#") (Member FSigned (Just 64) "std/i64"),
           Position "result" (Member FSigned (Just 64) "std/i64") (Member FSigned (Just 64) "ghc-prim/Int#")
-        ]
+        ],
+      srCallerEffects = [],
+      srCalleeEffects = [],
+      srCalleeExport = Nothing
     }
 
 -- | Fixture pair 2: C @int32@ widened into Rust @i64@ on the argument,
@@ -248,5 +334,8 @@ fixtureCWidened =
       srPositions =
         [ Position "arg 0" (Member FSigned (Just 32) "std/int32") (Member FSigned (Just 64) "std/i64"),
           Position "result" (Member FSigned (Just 32) "std/i32") (Member FSigned (Just 32) "std/int32")
-        ]
+        ],
+      srCallerEffects = [],
+      srCalleeEffects = [],
+      srCalleeExport = Nothing
     }
