@@ -21,7 +21,9 @@ import System.IO (openTempFile, hClose)
 import Test.Hspec
 
 import IntelliMonad.Tools.OrganBank
-import IntelliMonad.Types (HasFunctionObject (..))
+import IntelliMonad.Types
+import IntelliMonad.Prompt (runPrompt)
+import IntelliMonad.Persist (StatelessConf)
 import Database.Persist.Sqlite (PersistValue (..))
 import System.FilePath (takeFileName)
 
@@ -44,8 +46,8 @@ sampleDoc =
             "exports" A..= ["factorial" :: Text],
             "imports" A..= [q "std/Prelude"],
             "definitions"
-              A..= [ def "factorial" "public" (fnTy ["int"] "pure" "int"),
-                     def "main" "public" (fnTy [] "io" "unit")
+              A..= [ def "Factorial" "factorial" "public" (fnTy ["int"] "pure" "int"),
+                     def "Factorial" "main" "public" (fnTy [] "io" "unit")
                    ],
             "data_types" A..= ([] :: [A.Value]),
             "effect_decls" A..= ([] :: [A.Value])
@@ -70,19 +72,21 @@ rustDoc =
         A..= A.object
           [ "name" A..= ("factorial_rs" :: Text),
             "definitions"
-              A..= [ def "factorial" "public" (fnTy ["int"] "io" "int")
+              A..= [ def "factorial_rs" "factorial" "public" (fnTy ["int"] "io" "int")
                    ],
             "data_types" A..= ([] :: [A.Value]),
             "effect_decls" A..= ([] :: [A.Value])
           ]
     ]
 
--- | A definition with the given name/visibility and a fn type
--- (args ->{effects} result).
-def :: Text -> Text -> A.Value -> A.Value
-def n vis ty =
+-- | A definition with the given module/name/visibility and a fn type
+-- (args ->{effects} result). The module mirrors what real shims emit:
+-- each definition's name qname carries its own module, and the index
+-- keys symbols on it.
+def :: Text -> Text -> Text -> A.Value -> A.Value
+def m n vis ty =
   A.object
-    [ "name" A..= A.object ["module" A..= ("?" :: Text), "name" A..= A.object ["text" A..= n, "unique" A..= (1 :: Int)]],
+    [ "name" A..= A.object ["module" A..= m, "name" A..= A.object ["text" A..= n, "unique" A..= (1 :: Int)]],
       "type" A..= ty,
       "expr" A..= A.object [],
       "sort" A..= ("fun" :: Text),
@@ -307,8 +311,108 @@ spec = do
     it "omits module headers that carry no symbols" $ do
       let ls = renderRepoMap [("Empty", "c", "[]", 0)] syms
       ls `shouldNotContain` [("Empty [c]" :: Text)]
+  describe "organ_plan_stub" $ do
+    it "names the tool in the organ_* namespace" $
+      getFunctionName @OrganPlanStub `shouldBe` "organ_plan_stub"
+
+    it "plans glue for an ingested crossing, fail-open to runtime checks on synthetic qnames" $
+      withFreshIndex $ \tmp -> do
+        idx <- defaultOrganIndex
+        _ <- ingestPath idx tmp
+        r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "Factorial" "factorial" (Just "haskell") "factorial_rs" "factorial" (Just "rust"))
+        let out = organPlanStubOutput r
+        -- Both fixtures use the synthetic std/int qname, which has no
+        -- dictionary axiom: memberFor falls back to the dynamic member
+        -- and the plan honestly demands runtime checks instead of
+        -- pretending the crossing is proven.
+        opsoVerdict out `shouldBe` "licensed-with-runtime-checks"
+        T.unpack (opsoCaller out) `shouldContain` "omni_haskell_Factorial_factorial"
+        T.unpack (opsoCallee out) `shouldContain` "omni_rust_factorial_rs_factorial"
+        opsoStubs out `shouldContain` ["// marshal notes:"]
+
+    it "refuses a real unlicensed crossing (rust i64 result into ocaml's 63-bit int)" $
+      withOcamlIndex $ \tmp -> do
+        idx <- defaultOrganIndex
+        _ <- ingestPath idx tmp
+        r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_oc" "factorial" (Just "ocaml") "factorial_rs" "factorial" (Just "rust"))
+        let out = organPlanStubOutput r
+        -- The result flows callee→caller: rust std/i64 (64 bits) into
+        -- OCaml's 63-bit tagged int is a genuine narrowing.
+        opsoVerdict out `shouldBe` "unlicensed-narrowing"
+        all ("//" `T.isPrefixOf`) (opsoStubs out) `shouldBe` True
+        any ("axiom:" `T.isInfixOf`) (opsoStubs out) `shouldBe` True
+
+    it "fails closed when a symbol is not in the index" $
+      withFreshIndex $ \tmp -> do
+        idx <- defaultOrganIndex
+        _ <- ingestPath idx tmp
+        r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "Missing" "factorial" Nothing "factorial_rs" "factorial" (Just "rust"))
+        let out = organPlanStubOutput r
+        opsoVerdict out `shouldBe` "unlicensed-resolve"
+        any ("Symbol not in the index" `T.isInfixOf`) (opsoStubs out) `shouldBe` True
+
   where
     sameArgs ta tb =
       boundaryReport (OrganCheckBoundary "Factorial" "factorial" (Just "haskell") "factorial_rs" "factorial" (Just "rust")) (Just "haskell") ta (typeHeadline ta) (Just "rust") tb (typeHeadline tb)
     sameArgsNoLang ta tb =
       boundaryReport (OrganCheckBoundary "Factorial" "factorial" (Just "haskell") "factorial_rs" "factorial" (Just "rust")) Nothing ta (typeHeadline ta) Nothing tb (typeHeadline tb)
+    -- fnTy above hardcodes module "std" for every qname, which cannot
+    -- express the real dictionary qnames (Stdlib/int, std/i64) the
+    -- axiom-table tests need.
+    fnTyQ :: [(Text, Text)] -> Text -> (Text, Text) -> A.Value
+    fnTyQ args eff (rmod, rname) =
+      A.object
+        [ "fn"
+            A..= A.object
+              [ "args" A..= [A.object ["multiplicity" A..= ("many" :: Text), "type" A..= qn a] | a <- args],
+                "effect" A..= A.object ["effects" A..= [A.object ["module" A..= ("std" :: Text), "name" A..= A.object ["text" A..= eff]]]],
+                "result" A..= qn (rmod, rname)
+              ]
+        ]
+      where
+        qn (m, n) = A.object ["con" A..= A.object ["qname" A..= A.object ["module" A..= m, "name" A..= A.object ["text" A..= n]]]]
+    ocamlDoc :: A.Value
+    ocamlDoc =
+      A.object
+        [ "schema_version" A..= ("1.0.0" :: Text),
+          "metadata" A..= A.object ["source_language" A..= ("ocaml" :: Text), "shim_version" A..= ("0.1.0" :: Text)],
+          "module"
+            A..= A.object
+              [ "name" A..= ("factorial_oc" :: Text),
+                "definitions" A..= [def "factorial_oc" "factorial" "public" (fnTyQ [("Stdlib", "int")] "io" ("Stdlib", "int"))],
+                "data_types" A..= ([] :: [A.Value]),
+                "effect_decls" A..= ([] :: [A.Value])
+              ]
+        ]
+    rustDoc64 :: A.Value
+    rustDoc64 =
+      A.object
+        [ "schema_version" A..= ("1.0.0" :: Text),
+          "metadata" A..= A.object ["source_language" A..= ("rust" :: Text), "shim_version" A..= ("0.1.0" :: Text)],
+          "module"
+            A..= A.object
+              [ "name" A..= ("factorial_rs" :: Text),
+                "definitions" A..= [def "factorial_rs" "factorial" "public" (fnTyQ [("std", "i64")] "io" ("std", "i64"))],
+                "data_types" A..= ([] :: [A.Value]),
+                "effect_decls" A..= ([] :: [A.Value])
+              ]
+        ]
+    withOcamlIndex act = do
+      tmpRoot <- getTemporaryDirectory
+      (fp, h) <- openTempFile tmpRoot "organ-test"
+      hClose h
+      removeFile fp
+      createDirectory fp
+      A.encodeFile (fp ++ "/factorial_oc.json") ocamlDoc
+      A.encodeFile (fp ++ "/factorial_rs.json") rustDoc64
+      old <- lookupEnv "ORGAN_INDEX"
+      setEnv "ORGAN_INDEX" (fp ++ "/index.db")
+      r <- act fp
+      case old of
+        Just v -> setEnv "ORGAN_INDEX" v
+        Nothing -> unsetEnv "ORGAN_INDEX"
+      removeDirectoryRecursive fp
+      return r

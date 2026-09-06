@@ -114,3 +114,46 @@ Next: C2 compiles the C fixture for real (one process, two islands),
 C3 adds the Koka effect-row case, and the dictionary's canonical-core
 entries (`core/bool`, `core/unit`, `core/text`) await a first shim
 adoption.
+
+## C2 spike — DONE (2026-09-06)
+
+The full loop ran live, end to end, in one process:
+
+1. **Wire**: two OrganIR docs with genuine dictionary qnames
+   (haskell `ghc-prim/Int#`, rust `std/i64`) ingested through the real
+   `mcp-serve` binary; `organ_plan_stub` returned `licensed-lossless`
+   and the rendered caller-side C in both role orders (haskell→rust
+   and rust→haskell).
+2. **Compile**: the generated `caller.c` compiled by gcc unchanged;
+   the Rust island built with `rustc --crate-type staticlib`; the
+   Haskell island with `ghc -c`; the whole linked with
+   `ghc -no-hs-main` so base/ghc-prim/RTS resolve.
+3. **Run**: the host called all three paths and every value was
+   correct:
+
+   | path | result |
+   |---|---|
+   | C host → generated glue → rust island | 10! = 3628800 |
+   | GHC island → wire-generated glue → rust island | 12! = 479001600 |
+   | GHC island export (direct) | 7! = 5040 |
+
+### Design finding: bridge names are a namespace of their own
+
+The spike's first link failed with a multiple-definition error: the
+Haskell island's `foreign export` used the glue symbol's name
+(`omni_haskell_Factorial_factorial`), colliding with the generated
+caller wrapper. Rule for C2's generator: **bridge symbols are named
+after the crossing (caller + callee + `omni_` prefix), while island
+exports keep their own names** — the callee trampoline must call the
+island's *actual* export, never assume it shares the bridge name. The
+callee-side skeleton stays `extern`-light for exactly this reason: C2
+must learn the callee island's real entry point, not invent one.
+
+### What C2 proper still owes
+
+The spike hand-filled the callee trampoline
+(`/tmp/c2spike/callee_trampoline.c`); the generator's callee side
+still emits the `/* C2: trampoline */` placeholder. C2's remaining
+work is to make `renderCStubs` emit the filled form given the callee
+island's real export name, plus an RTS-init contract (which island
+calls `hs_init`, and when) for GHC-hosted processes.

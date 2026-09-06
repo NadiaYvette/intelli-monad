@@ -51,6 +51,9 @@ organFindSymbol = ToolProxy (Proxy :: Proxy OrganFindSymbol)
 organCheckBoundary :: ToolProxy
 organCheckBoundary = ToolProxy (Proxy :: Proxy OrganCheckBoundary)
 
+organPlanStub :: ToolProxy
+organPlanStub = ToolProxy (Proxy :: Proxy OrganPlanStub)
+
 organDiagnostics :: ToolProxy
 organDiagnostics = ToolProxy (Proxy :: Proxy OrganDiagnostics)
 
@@ -65,6 +68,7 @@ defaultTools =
     organRepoMap,
     organFindSymbol,
     organCheckBoundary,
+    organPlanStub,
     organDiagnostics,
     organIngest
   ]

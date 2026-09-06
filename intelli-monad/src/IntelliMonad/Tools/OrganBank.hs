@@ -40,6 +40,9 @@ module IntelliMonad.Tools.OrganBank
   ( OrganRepoMap (..)
   , OrganFindSymbol (..)
   , OrganCheckBoundary (..)
+  , OrganPlanStub (..)
+  , OrganPlanStubOutput (..)
+  , organPlanStubOutput
   , OrganDiagnostics (..)
   , OrganIngest (..)
   , defaultOrganIndex
@@ -74,6 +77,7 @@ import Database.Sqlite
 import GHC.Generics (Generic)
 import IntelliMonad.Types
 import qualified IntelliMonad.Tools.OrganBank.Dictionary as D
+import qualified IntelliMonad.Tools.OrganBank.Stubs as S
 import System.Directory
 import System.Environment (lookupEnv)
 import System.FilePath (takeExtension, (</>))
@@ -859,6 +863,125 @@ boundaryReport args mlangA ta ha mlangB tb hb =
       _ -> ""
     mkPair (Just x) (Just y) = Just (T.pack (show x), T.pack (show y))
     mkPair _ _ = Nothing
+
+-- | Input for 'organ_plan_stub'. The same four identifiers as
+-- 'OrganCheckBoundary': the caller and callee symbols the generated
+-- glue will connect.
+data OrganPlanStub = OrganPlanStub
+  { opsModuleA :: Text,
+    opsNameA :: Text,
+    opsLangA :: Maybe Text,
+    opsModuleB :: Text,
+    opsNameB :: Text,
+    opsLangB :: Maybe Text
+  }
+  deriving (Eq, Show, Generic, JSONSchema, A.FromJSON, A.ToJSON)
+
+instance HasFunctionObject OrganPlanStub where
+  getFunctionName = "organ_plan_stub"
+  getFunctionDescription =
+    "Generate C-ABI glue for a cross-language call, licensed by the representation dictionary. "
+      <> "Refuses crossings the axioms cannot prove safe — the refusal, with cited axioms, is the output. "
+      <> "Rendered text is deterministic so a diff review of generated glue is meaningful."
+  getFieldDescription "opsModuleA" = "Module of the caller symbol"
+  getFieldDescription "opsNameA" = "Name of the caller symbol"
+  getFieldDescription "opsLangA" = "Optional caller language when the name exists in several (e.g. haskell)"
+  getFieldDescription "opsModuleB" = "Module of the callee symbol"
+  getFieldDescription "opsNameB" = "Name of the callee symbol"
+  getFieldDescription "opsLangB" = "Optional callee language"
+  getFieldDescription _ = ""
+
+data OrganPlanStubOutput = OrganPlanStubOutput
+  { opsoVerdict :: Text,
+    opsoCaller :: Text,
+    opsoCallee :: Text,
+    opsoStubs :: [Text]
+  }
+  deriving (Eq, Show, Generic, A.FromJSON, A.ToJSON)
+
+-- | Unwrap the plan tool's output. (The data-instance constructor
+-- stays internal; callers and tests use this accessor.)
+organPlanStubOutput :: Output OrganPlanStub -> OrganPlanStubOutput
+organPlanStubOutput (OrganPlanStubOut o) = o
+
+instance Tool OrganPlanStub where
+  data Output OrganPlanStub = OrganPlanStubOut OrganPlanStubOutput
+    deriving (Eq, Show, Generic, A.FromJSON, A.ToJSON)
+
+  toolExec args = do
+    idx <- liftIO defaultOrganIndex
+    mside <- liftIO $ withIndex idx $ \conn -> do
+      a <- fetchOne conn (args.opsModuleA) (args.opsNameA) (args.opsLangA)
+      b <- fetchOne conn (args.opsModuleB) (args.opsNameB) (args.opsLangB)
+      return ((,) <$> a <*> b)
+    return $ OrganPlanStubOut $ case mside of
+      Left problem ->
+        OrganPlanStubOutput "unlicensed-resolve" "" "" ["// STUB REFUSED: unlicensed-resolve", "//   " <> problem]
+      Right ((ta, _ha, la), (tb, _hb, lb)) ->
+        case (fnOf ta, fnOf tb) of
+          (Just fa, Just fb) ->
+            let memberFor l t =
+                  let r = tyHeadName t
+                      (m, n) = T.breakOnEnd "/" r
+                   in fromMaybe (D.Member D.FDynamic Nothing ("unresolved qname: " <> r)) (if T.null r || T.null m then Nothing else D.memberOf l (T.dropEnd 1 m) n)
+                positions =
+                  [ S.Position ("arg " <> T.pack (show i)) (memberFor la x) (memberFor lb y)
+                  | (i, (x, y)) <- zip [1 :: Int ..] (zip (argsOf fa) (argsOf fb))
+                  ]
+                    <> case (resOf fb, resOf fa) of
+                      (Just r, Just c) -> [S.Position "result" (memberFor lb r) (memberFor la c)]
+                      _ -> []
+                req = S.StubRequest
+                  { S.srCaller = la <> ":" <> args.opsModuleA <> "/" <> args.opsNameA,
+                    S.srCallee = lb <> ":" <> args.opsModuleB <> "/" <> args.opsNameB,
+                    S.srPositions = positions
+                  }
+             in case S.planBoundary req of
+                  S.StubRefused v reasons -> OrganPlanStubOutput v "" "" (S.renderCStubs (S.StubRefused v reasons))
+                  plan@S.StubPlan {} ->
+                    OrganPlanStubOutput
+                      (S.spVerdict plan)
+                      (T.intercalate "\n" (S.spCallerSide plan))
+                      (T.intercalate "\n" (S.spCalleeSide plan))
+                      (S.renderCStubs plan)
+          _ ->
+            OrganPlanStubOutput "unlicensed-shape" "" "" ["// STUB REFUSED: unlicensed-shape", "//   one side is not a function type; there is no call to glue"]
+    where
+      fetchOne conn m n mlang = do
+        let sql = case mlang of
+              Just _ -> "SELECT ty_json, type_headline, lang FROM symbols WHERE module = ? AND name = ? AND lang = ?"
+              Nothing -> "SELECT ty_json, type_headline, lang FROM symbols WHERE module = ? AND name = ?"
+            params = [PersistText m, PersistText n] <> maybe [] ((: []) . PersistText) mlang
+        rows <- queryRows conn sql params
+          (\r -> return (pvText (r !! 0), pvText (r !! 1), pvText (r !! 2)))
+        return $ case rows of
+          [] -> Left "Symbol not in the index; run organ_ingest first or check spelling."
+          [(tj, h, l)] ->
+            case A.decode (BL.fromStrict (TEnc.encodeUtf8 tj)) of
+              Just v -> Right (v, h, l)
+              Nothing -> Left "Stored type JSON failed to re-decode (index corruption?)."
+          multiple ->
+            Left
+              ( "Ambiguous: symbol exists in "
+                  <> T.pack (show (length multiple))
+                  <> " languages ("
+                  <> T.intercalate ", " [l | (_, _, l) <- multiple]
+                  <> "). Re-run with the lang qualifier."
+              )
+      fnOf v = case v of
+        A.Object o | Just fn <- KM.lookup "fn" o -> Just fn
+        A.Object o | Just fv <- KM.lookup "forall" o -> case fv of
+          A.Object b | Just body <- KM.lookup "body" b -> fnOf body
+          _ -> Nothing
+        _ -> Nothing
+      argsOf fn = case fn of
+        A.Object o -> case KM.lookup "args" o of
+          Just (A.Array as) -> [t | A.Object a <- foldr (:) [] as, Just t <- [KM.lookup "type" a]]
+          _ -> []
+        _ -> []
+      resOf fn = case fn of
+        A.Object o -> KM.lookup "result" o
+        _ -> Nothing
 
 -- | Input for 'organ_diagnostics'.
 data OrganDiagnostics = OrganDiagnostics ()

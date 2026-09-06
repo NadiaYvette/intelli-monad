@@ -68,47 +68,53 @@ table :: Map.Map (Text, Text) Member
 table =
   Map.fromList $
     concat
-      [ -- C: ISO/IEC 9899 minimal widths + LP64 practice on the targets
-        -- organ-bank runs on.
-        [ (("c", "std/int8"), Member FSigned (Just 8) "ISO C: signed char >= 8 bits"),
-          (("c", "std/int16"), Member FSigned (Just 16) "ISO C: short >= 16 bits"),
-          (("c", "std/int32"), Member FSigned (Just 32) "ISO C: int >= 32 bits on LP64"),
-          (("c", "std/int64"), Member FSigned (Just 64) "ISO C: long/long long = 64 bits on LP64"),
-          (("c", "std/u8"), Member FUnsigned (Just 8) "ISO C uint8_t"),
-          (("c", "std/u16"), Member FUnsigned (Just 16) "ISO C uint16_t"),
-          (("c", "std/u32"), Member FUnsigned (Just 32) "ISO C uint32_t"),
-          (("c", "std/u64"), Member FUnsigned (Just 64) "ISO C uint64_t"),
-          (("c", "std/f32"), Member FFloat (Just 32) "ISO C float: IEEE-754 single"),
-          (("c", "std/f64"), Member FFloat (Just 64) "ISO C double: IEEE-754 double")
+      [ -- C: ISO/IEC 9899 (C17). The minimal widths are 5.2.4.2.1
+        -- (CHAR_BIT >= 8, SCHAR_MIN <= -127, SHRT_MIN <= -32767,
+        -- INT_MIN <= -32767, LONG_MIN <= -2147483647); the 32/64-bit
+        -- values below are the LP64 practice of every target organ-bank
+        -- runs on, NOT what the standard alone guarantees — plain int
+        -- is only guaranteed >= 16 bits. Exact-width unsigned types are
+        -- stdint.h (C17 7.20.1.1).
+        [ (("c", "std/int8"), Member FSigned (Just 8) "ISO C 5.2.4.2.1: signed char >= 8 bits; 8 is universal practice"),
+          (("c", "std/int16"), Member FSigned (Just 16) "ISO C 5.2.4.2.1: short >= 16 bits; 16 is universal practice"),
+          (("c", "std/int32"), Member FSigned (Just 32) "ISO C 5.2.4.2.1 guarantees only >= 16; 32 bits is LP64 practice on all organ-bank targets"),
+          (("c", "std/int64"), Member FSigned (Just 64) "ISO C 5.2.4.2.1 (long) + LP64 practice: 64 bits on all organ-bank targets"),
+          (("c", "std/u8"), Member FUnsigned (Just 8) "C17 7.20.1.1: uint8_t (exact-width; optional in theory, universal in practice)"),
+          (("c", "std/u16"), Member FUnsigned (Just 16) "C17 7.20.1.1: uint16_t"),
+          (("c", "std/u32"), Member FUnsigned (Just 32) "C17 7.20.1.1: uint32_t"),
+          (("c", "std/u64"), Member FUnsigned (Just 64) "C17 7.20.1.1: uint64_t"),
+          (("c", "std/f32"), Member FFloat (Just 32) "ISO C 5.2.4.2.2 (FLT_* limits): IEEE-754 binary32 on all supported targets"),
+          (("c", "std/f64"), Member FFloat (Just 64) "ISO C 5.2.4.2.2 (DBL_* limits): IEEE-754 binary64")
         ],
-        -- Haskell: GHC.AtLeastBoundish Int is documented \">= 2^29-1\"; on
-        -- every currently supported 64-bit target Int# is 64 bits.
-        [ (("haskell", "ghc-prim/Int#"), Member FSigned (Just 64) "GHC: Int# is 64 bits on all supported 64-bit targets (>= 29 documented)"),
-          (("haskell", "ghc-prim/Word#"), Member FUnsigned (Just 64) "GHC: Word# is 64 bits on all supported 64-bit targets")
+        -- Haskell: the GHC.Prim docs state that Haskell 98 requires at
+        -- least 30 bits for Int and that Int# is a machine integer; on
+        -- every currently supported 64-bit target that word is 64 bits.
+        [ (("haskell", "ghc-prim/Int#"), Member FSigned (Just 64) "GHC.Prim docs: Haskell98 requires >= 30 bits; Int# is a machine integer — 64 bits on all supported 64-bit targets"),
+          (("haskell", "ghc-prim/Word#"), Member FUnsigned (Just 64) "GHC.Prim docs: Word# is a machine word — 64 bits on all supported 64-bit targets")
         ],
         -- Rust: fixed by the language reference.
-        [ (("rust", "std/i8"), Member FSigned (Just 8) "Rust reference: i8"),
-          (("rust", "std/i16"), Member FSigned (Just 16) "Rust reference: i16"),
-          (("rust", "std/i32"), Member FSigned (Just 32) "Rust reference: i32"),
-          (("rust", "std/i64"), Member FSigned (Just 64) "Rust reference: i64"),
-          (("rust", "std/i128"), Member FSigned (Just 128) "Rust reference: i128"),
-          (("rust", "std/u8"), Member FUnsigned (Just 8) "Rust reference: u8"),
-          (("rust", "std/u16"), Member FUnsigned (Just 16) "Rust reference: u16"),
-          (("rust", "std/u32"), Member FUnsigned (Just 32) "Rust reference: u32"),
-          (("rust", "std/u64"), Member FUnsigned (Just 64) "Rust reference: u64"),
-          (("rust", "std/u128"), Member FUnsigned (Just 128) "Rust reference: u128"),
-          (("rust", "std/f32"), Member FFloat (Just 32) "Rust reference: f32 IEEE-754 single"),
-          (("rust", "std/f64"), Member FFloat (Just 64) "Rust reference: f64 IEEE-754 double")
+        [ (("rust", "std/i8"), Member FSigned (Just 8) "Rust reference (type.numeric): i8"),
+          (("rust", "std/i16"), Member FSigned (Just 16) "Rust reference (type.numeric): i16"),
+          (("rust", "std/i32"), Member FSigned (Just 32) "Rust reference (type.numeric): i32"),
+          (("rust", "std/i64"), Member FSigned (Just 64) "Rust reference (type.numeric): i64"),
+          (("rust", "std/i128"), Member FSigned (Just 128) "Rust reference (type.numeric): i128"),
+          (("rust", "std/u8"), Member FUnsigned (Just 8) "Rust reference (type.numeric): u8"),
+          (("rust", "std/u16"), Member FUnsigned (Just 16) "Rust reference (type.numeric): u16"),
+          (("rust", "std/u32"), Member FUnsigned (Just 32) "Rust reference (type.numeric): u32"),
+          (("rust", "std/u64"), Member FUnsigned (Just 64) "Rust reference (type.numeric): u64"),
+          (("rust", "std/u128"), Member FUnsigned (Just 128) "Rust reference (type.numeric): u128"),
+          (("rust", "std/f32"), Member FFloat (Just 32) "Rust reference (type.numeric): f32 is IEEE 754-2008 binary32"),
+          (("rust", "std/f64"), Member FFloat (Just 64) "Rust reference (type.numeric): f64 is IEEE 754-2008 binary64")
         ],
         -- Zig: fixed by the language reference.
         [ (("zig", "std/i64"), Member FSigned (Just 64) "Zig language reference: i64"),
           (("zig", "std/u64"), Member FUnsigned (Just 64) "Zig language reference: u64"),
           (("zig", "std/f64"), Member FFloat (Just 64) "Zig language reference: f64 IEEE-754 double")
         ],
-        -- OCaml: the manual documents 31/63-bit tagged ints (one bit is
-        -- the pointer tag) — 63 usable on 64-bit runtimes.
-        [ (("ocaml", "Stdlib/int"), Member FSigned (Just 63) "OCaml manual: int is 63-bit signed on 64-bit runtimes (tagged)"),
-          (("ocaml", "Stdlib/float"), Member FFloat (Just 64) "OCaml manual: float is IEEE-754 double")
+        -- OCaml: the manual (§2.1 Base values) documents the tagged int;
+        -- one bit is the pointer tag, 63 usable on 64-bit runtimes.
+        [ (("ocaml", "Stdlib/int"), Member FSigned (Just 63) "OCaml manual §2.1 (values): int holds -2^62..2^62-1 on 64-bit runtimes (63-bit tagged)"),
+          (("ocaml", "Stdlib/float"), Member FFloat (Just 64) "OCaml manual §2.1 (values): IEEE 754 double, 53-bit mantissa")
         ],
         -- F#: int = Int32 by the F# spec.
         [ (("fsharp", "FSharp.Core/int"), Member FSigned (Just 32) "F# spec: int is Int32"),
