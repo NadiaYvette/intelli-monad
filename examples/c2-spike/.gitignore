@@ -4,4 +4,6 @@
 /build/
 /build-koka/
 /build-koka-gen/
+/build-koka-mapped/
+/build-multi/
 /build-refused/

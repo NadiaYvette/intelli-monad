@@ -27,7 +27,7 @@ spec = do
       let req = StubRequest "haskell:Factorial/factorial" "c:factorial/factorial"
               [ Position "arg 0" (Member FSigned (Just 64) "ghc-prim/Int#") (Member FSigned (Just 32) "std/int32")
               , Position "result" (Member FSigned (Just 32) "std/int32") (Member FSigned (Just 64) "ghc-prim/Int#")
-              ] [] [] Nothing Nothing
+              ] [] [] Nothing Nothing False
           plan = planBoundary req
       spVerdict plan `shouldBe` "unlicensed-narrowing"
       -- The cited axioms name both representations and the widths:
@@ -38,13 +38,13 @@ spec = do
       spReasons plan `shouldSatisfy` any ("fits the wider" `T.isInfixOf`)
 
     it "refuses a request with no positions" $
-      spVerdict (planBoundary (StubRequest "a" "b" [] [] [] Nothing Nothing)) `shouldBe` "unlicensed-empty"
+      spVerdict (planBoundary (StubRequest "a" "b" [] [] [] Nothing Nothing False)) `shouldBe` "unlicensed-empty"
 
     it "plans a dynamic crossing as runtime-checks" $ do
       let req = StubRequest "prolog:factorial/factorial" "haskell:Factorial/factorial"
               [ Position "arg 0" (Member FDynamic Nothing "any") (Member FSigned (Just 64) "ghc-prim/Int#")
               , Position "result" (Member FSigned (Just 64) "ghc-prim/Int#") (Member FDynamic Nothing "any")
-              ] [] [] Nothing Nothing
+              ] [] [] Nothing Nothing False
       spVerdict (planBoundary req) `shouldBe` "licensed-with-runtime-checks"
 
   describe "renderCStubs (golden)" $ do
@@ -96,7 +96,7 @@ spec = do
 
     it "renders refusals as comment-only debris" $ do
       let req = StubRequest "haskell:x" "c:y"
-              [ Position "arg 0" (Member FSigned (Just 64) "ghc-prim/Int#") (Member FSigned (Just 32) "std/int32") ] [] [] Nothing Nothing
+              [ Position "arg 0" (Member FSigned (Just 64) "ghc-prim/Int#") (Member FSigned (Just 32) "std/int32") ] [] [] Nothing Nothing False
           ls = renderCStubs (planBoundary req)
       ls `shouldSatisfy` all (T.isPrefixOf "//")
       ls `shouldSatisfy` any (T.isInfixOf "STUB REFUSED")
@@ -241,7 +241,7 @@ spec = do
       let req = StubRequest "lean4:N/Nat" "haskell:GMP/Natural"
               [ Position "arg 0" (Member FBigUnsigned Nothing "Lean/Nat") (Member FBigUnsigned Nothing "GMP/Natural")
               , Position "result" (Member FBigUnsigned Nothing "GMP/Natural") (Member FBigUnsigned Nothing "Lean/Nat")
-              ] [] [] Nothing Nothing
+              ] [] [] Nothing Nothing False
       spVerdict (planBoundary req) `shouldBe` "licensed-lossless"
       spMarshal (planBoundary req) `shouldSatisfy` any ("box swap" `T.isInfixOf`)
 
@@ -249,14 +249,14 @@ spec = do
       let req = StubRequest "lean4:N/Nat" "haskell:GMP/Integer"
               [ Position "arg 0" (Member FBigUnsigned Nothing "Lean/Nat") (Member FBigSigned Nothing "GMP/Integer")
               , Position "result" (Member FBigSigned Nothing "GMP/Integer") (Member FBigSigned Nothing "GMP/Integer")
-              ] [] [] Nothing Nothing
+              ] [] [] Nothing Nothing False
       spVerdict (planBoundary req) `shouldBe` "licensed-lossless"
       spMarshal (planBoundary req) `shouldSatisfy` any ("zero-extend the nat" `T.isInfixOf`)
 
     it "refuses a signed bigint crossing into a Nat (the negative domain does not transfer)" $ do
       let req = StubRequest "haskell:GMP/Integer" "lean4:N/Nat"
               [ Position "arg 0" (Member FBigSigned Nothing "GMP/Integer") (Member FBigUnsigned Nothing "Lean/Nat") ]
-              [] [] Nothing Nothing
+              [] [] Nothing Nothing False
           plan = planBoundary req
       spVerdict plan `shouldBe` "unlicensed-overflow-domain"
       spReasons plan `shouldSatisfy` any ("below zero" `T.isInfixOf`)
@@ -265,7 +265,7 @@ spec = do
       let req = StubRequest "lean4:N/Nat" "rust:factorial/factorial"
               [ Position "arg 0" (Member FBigSigned Nothing "Lean/Int") (Member FSigned (Just 64) "std/i64")
               , Position "result" (Member FSigned (Just 64) "std/i64") (Member FBigSigned Nothing "Lean/Int")
-              ] [] [] Nothing Nothing
+              ] [] [] Nothing Nothing False
           plan = planBoundary req
       -- Not unlicensed-narrowing (there is no width to compare): the
       -- honest verdict is that the domains are different representations.
@@ -275,7 +275,7 @@ spec = do
     it "renders the FBig crossing refusal as comment-only debris" $ do
       let req = StubRequest "lean4:N/Nat" "rust:factorial/factorial"
               [ Position "arg 0" (Member FBigSigned Nothing "Lean/Int") (Member FSigned (Just 64) "std/i64") ]
-              [] [] Nothing Nothing
+              [] [] Nothing Nothing False
       renderCStubs (planBoundary req) `shouldSatisfy` all (T.isPrefixOf "//")
 
     it "refuses a same-family-but-different-domain FBig pair by domain, not family" $ do
@@ -285,3 +285,55 @@ spec = do
           (vU, _) = license (Member FBigUnsigned Nothing "a") (Member FBigSigned Nothing "b")
       vS `shouldBe` "unlicensed-overflow-domain"
       vU `shouldBe` "licensed-lossless"
+
+  describe "C3: the effect map (exception -> caller's convention)" $ do
+    it "emits no effect map unless the request asks for one" $
+      spEffectMap (planBoundary fixtureHaskellRust) `shouldBe` Nothing
+    it "emits no effect map for a non-koka callee (fail-closed)" $ do
+      let req = fixtureHaskellRust {srEffectMap = True}
+      spEffectMap (planBoundary req) `shouldBe` Nothing
+    it "emits the koka handle/try shim with the wire's status sentinel" $ do
+      let req = fixtureHaskellRust
+            { srCaller = "rust:factorial_rs/factorial"
+            , srCallee = "koka:factorial/island-factorial"
+            , srCalleeEffects = ["std/core/div", "std/core/exn"]
+            , srCalleeExport = Just "kk_island_factorial"
+            , srEffectMap = True
+            }
+          shim = T.unpack (T.unlines (fromMaybe [] (spEffectMap (planBoundary req))))
+      -- The shim is koka source in the generated <module>_emap module:
+      shim `shouldContain` "module factorial_emap"
+      shim `shouldContain` "import factorial"
+      shim `shouldContain` "pub fun mapped-island-factorial(n : int64)"
+      shim `shouldContain` "handle/try("
+      shim `shouldContain` "fn(exn) min-int64"
+      -- Deterministic symbol contract, matching the adapter's target
+      -- (koka doubles the module name's underscore in C symbols):
+      shim `shouldContain` "int64_t kk_factorial__emap_mapped_island_factorial(int64_t n, kk_context_t* ctx)"
+      -- Sentinel is stated precisely enough to be checkable:
+      shim `shouldContain` "min-int64 (-9223372036854775808)"
+    it "targets the adapter at the mapped entry when the map is requested" $ do
+      let req = fixtureHaskellRust
+            { srCaller = "rust:factorial_rs/factorial"
+            , srCallee = "koka:factorial/island-factorial"
+            , srCalleeEffects = ["std/core/exn"]
+            , srCalleeExport = Just "kk_island_factorial"
+            , srCalleeAdapter = Just "kk_island_factorial"
+            , srEffectMap = True
+            }
+          adapter = T.unpack (T.unlines (fromMaybe [] (spAdapter (planBoundary req))))
+      -- The mapped entry already speaks plain int64_t (koka unboxes
+      -- int64), so the forward is boxing-free:
+      adapter `shouldContain` "return kk_factorial__emap_mapped_island_factorial(n, kk_get_context());"
+      -- And it must NOT box (no kk_integer conversion in mapped mode):
+      adapter `shouldNotContain` "kk_factorial__emap_mapped_island_factorial(kk_integer_from_int64"
+    it "trails the adapter section in renderCStubs output" $ do
+      let req = fixtureHaskellRust
+            { srCallee = "koka:factorial/island-factorial"
+            , srCalleeExport = Just "kk_island_factorial"
+            , srCalleeAdapter = Just "kk_island_factorial"
+            , srEffectMap = True
+            }
+          ls = renderCStubs (planBoundary req)
+          idxOf s = length (takeWhile (not . T.isInfixOf s) ls)
+      idxOf "---- effect map" `shouldSatisfy` (> idxOf "// ABI adapter")

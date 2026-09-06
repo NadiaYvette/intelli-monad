@@ -120,3 +120,71 @@ are FBigUnsigned. A koka-bigint → rust-i64 crossing now refuses as
 and a signed-bigint → Nat crossing refuses as `unlicensed-overflow-domain`
 (negatives do not transfer) — see the `C4: FBig member families`
 tests in `test/StubSpec.hs`.
+
+## C3 closed: the generated effect map (run_koka_mapped.sh)
+
+The milestone's last open note — an effectful call must *declare how
+the effects surface* — is now generator output. With
+`opsEffectMap: true`, `organ_plan_stub` emits:
+
+- an island-side shim (`<module>_emap.kk`): a koka `handle/try` that
+  runs the island's real logic and maps any exception to the wire's
+  status sentinel (`min-int64`);
+- an adapter that forwards to the **mapped entry** — which, because
+  koka unboxes `int64`, already has exactly the wire's plain
+  `int64_t` ABI (no `kk_integer` boxing in the forward).
+
+`run_koka_mapped.sh` drives it through the real `mcp-serve` binary:
+
+```
+value: host -> wire -> mapped koka, 5!               got 120, want 120 ok
+value: rust island -> wire -> koka, 6!               got 720, want 720 ok
+value: adapter direct, 7!                            got 5040, want 5040 ok
+error: mapped entry surfaces the sentinel            got -9223372036854775808 ok
+```
+
+The demo island now genuinely throws (`throw("island factorial:
+negative argument")` for `n < 0`) — its `<div,exn>` row is honest, and
+the host sees the exception as a plain int64 return. One mangled-name
+fact to know: koka doubles a module name's underscore in C symbols
+(`factorial_emap` → `kk_factorial__emap_*`, header
+`factorial__emap.h`); the generator handles it.
+
+## The multi-island gold: one process, three runtimes (run_multi.sh)
+
+`run_multi.sh` links C host + GHC RTS (Factorial.hs) + kklib
+(factorial.kk) + rust (factorial.rs) into ONE process. Two
+`organ_plan_stub` calls over the real wire plan both crossings
+(`rust→koka` with the generated adapter, `rust→haskell` filled with
+`hs_factorial`), then five call paths run:
+
+```
+C host -> plan A glue -> koka island        5! = 120      ok
+rust island -> plan A glue -> koka island   6! = 720      ok
+rust island -> plan B glue -> GHC island    7! = 5040     ok
+GHC island direct (hs_factorial)            8! = 40320    ok
+koka island direct (adapter entry)          9! = 362880   ok
+```
+
+Naming facts: glue symbols derive from the full caller qname
+*including* the language prefix
+(`rust:factorial_hs_call/to_haskell` →
+`omni_rust_factorial_hs_call_to_haskell`); the two rust caller qnames
+differ only in the dictionary so the two glue entries don't collide,
+while one island file plays both caller roles. And `OrganPlanStub`'s
+decoder tolerates old clients: fields added after the first release
+default on absence, which is why every earlier driver still runs
+unchanged against the new binary.
+
+## C4: the PMWA interop criterion (IntelliMonad.Tools.OrganBank.Interop)
+
+The per-pair criterion is a checkable claim with three legs —
+representation (positions stay in the scalar wire domain; off-domain
+positions refuse the claim rather than over-claim), calling
+convention (checked against what the plan actually emitted), effects
+(the subset rule is delegated to; a requested-but-ungeneratable map is
+`pmwa-unproven`, never dropped). Verdicts `pmwa-verified` /
+`pmwa-refused-*` / `pmwa-unproven-*` come with per-leg evidence and a
+declared witness domain (`2^40`: fixed-width scalars are exhausted
+exactly; anything beyond is outside the claim). `test/InteropSpec.hs`
+pins the matrix.

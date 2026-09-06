@@ -63,6 +63,7 @@ library
                     , IntelliMonad.Tools.KeyValue
                     , IntelliMonad.Tools.OrganBank
                     , IntelliMonad.Tools.OrganBank.Dictionary
+                    , IntelliMonad.Tools.OrganBank.Interop
                     , IntelliMonad.Tools.OrganBank.Stubs
                     , IntelliMonad.Persist
                     , IntelliMonad.Repl
@@ -194,6 +195,7 @@ test-suite intelli-monad-test
       , WireSpec
       , OrganSpec
       , DictionarySpec
+      , InteropSpec
       , StubSpec
 
     -- LANGUAGE extensions used by modules in this package.

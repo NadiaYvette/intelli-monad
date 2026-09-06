@@ -281,3 +281,86 @@ the 63-bit smallint payload, GHC `Integer`, ...):
   refuses as `overflow-domain` (negatives do not transfer).
 
 This retires the "FBig TODO" note at the end of the C3 section.
+
+## The C3 vision closed, the multi-island gold, and the C4 PMWA criterion (2026-09-06)
+
+All three remaining Phase C threads landed together, because the third
+depends on the first two:
+
+### 1. C3 closed: the generator-emitted effect map
+
+The C3 milestone's open note — "a `{div,exn}` call must force the stub
+to declare how the effects surface" — is now *generated*, not declared.
+`organ_plan_stub` takes `opsEffectMap: true`; for a koka island the
+plan carries an island-side shim (`factorial_emap.kk`) whose
+`handle/try` maps any island exception to the wire's status sentinel
+(`min-int64`), plus an adapter that forwards to the mapped entry.
+
+Two ABI facts (proven live, then pinned by tests):
+- koka unboxes `int64`, so the mapped entry's ABI is literally the
+  wire's: `int64_t kk_factorial__emap_mapped_island_factorial(int64_t,
+  kk_context_t*)` — the adapter forward needs no `kk_integer` boxing;
+- koka doubles a module name's underscore in C symbols
+  (`factorial_emap` → `kk_factorial__emap_*`, header
+  `factorial__emap.h`); the generator mangles accordingly.
+
+`run_koka_mapped.sh` runs the whole chain through the real wire —
+value paths (`5! = 120`, `6! = 720`, `7! = 5040`) and the error path:
+the demo island now genuinely *throws* on a negative argument
+(`throw("island factorial: negative argument")`), the generated shim
+catches it, and the host observes the sentinel `-9223372036854775808`
+over plain int64. No setjmp/longjmp, no error thread, no hand-written
+glue. The island's `<div,exn>` row is now fully honest: the `exn` is
+really used.
+
+### 2. The multi-island gold: one process, three runtimes
+
+`run_multi.sh` links **C host + GHC RTS + kklib + rust** into one
+process where every crossing rides `organ_plan_stub` output:
+
+```
+C host -> plan A glue -> koka island        5! = 120      ok
+rust island -> plan A glue -> koka island   6! = 720      ok
+rust island -> plan B glue -> GHC island    7! = 5040     ok
+GHC island direct (hs_factorial)            8! = 40320    ok
+koka island direct (adapter entry)          9! = 362880   ok
+```
+
+Two wire calls plan the two crossings (`rust→koka` with the generated
+adapter, `rust→haskell` with the trampoline filled by `hs_factorial`);
+the two rust caller qnames differ only in the dictionary so the glue
+symbols don't collide, and the same island file plays both roles.
+Naming rule learned: glue symbols derive from the *full* caller qname
+including the language prefix (`rust:factorial_hs_call/to_haskell` →
+`omni_rust_factorial_hs_call_to_haskell`).
+
+Backward compatibility made explicit: `OrganPlanStub`'s JSON decoder
+is hand-rolled — fields added after the first release
+(`opsCalleeExport`, `opsCalleeAdapter`, `opsEffectMap`) default on
+absence, so the original four-field wire clients (every pre-existing
+driver) keep working. A derived instance would have demanded every
+key and rejected exactly those callers.
+
+### 3. C4: the PMWA-shaped interop criterion
+
+`IntelliMonad.Tools.OrganBank.Interop` writes the per-pair criterion
+down as a *checkable claim* with three legs, per the milestone text
+("representation dictionary + calling convention + effect mapping"):
+
+1. **Representation** — every crossing position must stay in the
+   scalar wire domain (fixed-width ints, IEEE floats, bool, text,
+   unit). Off-domain positions (FBig/FDynamic) refuse the claim as
+   stated rather than over-claim: the witness does not reach them.
+2. **Calling convention** — checked against what the plan actually
+   emitted (`renderCStubs` is a pure function of the plan, so the
+   glue is deterministic and diff-reviewable), never against intent.
+3. **Effects** — `planBoundary`'s subset rule is delegated to (a
+   dictionary refusal can never verify); a requested-but-ungeneratable
+   effect map is `pmwa-unproven-effects`, never silently dropped.
+
+Verdicts: `pmwa-verified`, `pmwa-refused-{representation,licensed,
+effects}`, `pmwa-unproven-{effects,convention}` — with per-leg
+evidence and a declared witness domain (`pmwaWitnessDomain = 2^40`):
+fixed-width scalars are exhausted exactly (the wire ABI is total over
+them); values beyond the bound are outside the claim, which is what
+keeps the claim true. `InteropSpec.hs` pins the verdict matrix.

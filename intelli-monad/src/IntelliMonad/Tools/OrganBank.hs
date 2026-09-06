@@ -876,9 +876,31 @@ data OrganPlanStub = OrganPlanStub
     opsLangB :: Maybe Text,
     opsCalleeExport :: Maybe Text,
     -- ^ C4: emit the ABI adapter targeting this symbol name.
-    opsCalleeAdapter :: Maybe Text
+    opsCalleeAdapter :: Maybe Text,
+    opsEffectMap :: Bool
+    -- ^ C3: request the generator's effect map for an effectful
+    -- callee (koka: the handle/try shim mapping exceptions to the
+    -- wire's status sentinel).
   }
-  deriving (Eq, Show, Generic, JSONSchema, A.FromJSON, A.ToJSON)
+  deriving (Eq, Show, Generic, JSONSchema, A.ToJSON)
+
+-- | Hand-rolled decoder: fields added after the first release
+-- (@opsCalleeExport@, @opsCalleeAdapter@, @opsEffectMap@) default on
+-- absence, so wire clients written against the original four-field
+-- shape keep working — a derived instance would demand every key and
+-- reject exactly the callers the tool is backward-compatible with.
+instance A.FromJSON OrganPlanStub where
+  parseJSON = A.withObject "OrganPlanStub" $ \o ->
+    OrganPlanStub
+      <$> o A..: "opsModuleA"
+      <*> o A..: "opsNameA"
+      <*> o A..:? "opsLangA"
+      <*> o A..: "opsModuleB"
+      <*> o A..: "opsNameB"
+      <*> o A..:? "opsLangB"
+      <*> o A..:? "opsCalleeExport"
+      <*> o A..:? "opsCalleeAdapter"
+      <*> o A..:? "opsEffectMap" A..!= False
 
 instance HasFunctionObject OrganPlanStub where
   getFunctionName = "organ_plan_stub"
@@ -894,6 +916,7 @@ instance HasFunctionObject OrganPlanStub where
   getFieldDescription "opsLangB" = "Optional callee language"
   getFieldDescription "opsCalleeExport" = "The callee island's real entry symbol when it does not follow the module_name convention; the generated trampoline forwards to it"
   getFieldDescription "opsCalleeAdapter" = "Emit the C4 ABI adapter (projecting the wire's plain int64_t ABI onto the callee island's real ABI) targeting this symbol; supported for koka and haskell islands"
+  getFieldDescription "opsEffectMap" = "Request the C3 effect map for an effectful callee (koka: a handle/try shim that maps island exceptions to the wire's status sentinel min-int64 and gives the adapter a mapped entry with the wire's plain ABI)"
   getFieldDescription _ = ""
 
 data OrganPlanStubOutput = OrganPlanStubOutput
@@ -902,7 +925,10 @@ data OrganPlanStubOutput = OrganPlanStubOutput
     opsoCallee :: Text,
     opsoStubs :: [Text],
     -- ^ C4: the ABI-adapter section when requested (empty otherwise).
-    opsoAdapter :: [Text]
+    opsoAdapter :: [Text],
+    opsoEffectMap :: [Text]
+    -- ^ C3: the island-side effect-map source when requested and
+    -- generatable (empty otherwise).
   }
   deriving (Eq, Show, Generic, A.FromJSON, A.ToJSON)
 
@@ -923,7 +949,7 @@ instance Tool OrganPlanStub where
       return ((,) <$> a <*> b)
     return $ OrganPlanStubOut $ case mside of
       Left problem ->
-        OrganPlanStubOutput "unlicensed-resolve" "" "" ["// STUB REFUSED: unlicensed-resolve", "//   " <> problem] []
+        OrganPlanStubOutput "unlicensed-resolve" "" "" ["// STUB REFUSED: unlicensed-resolve", "//   " <> problem] [] []
       Right ((ta, _ha, la), (tb, _hb, lb)) ->
         case (fnOf ta, fnOf tb) of
           (Just fa, Just fb) ->
@@ -953,10 +979,11 @@ instance Tool OrganPlanStub where
                     S.srCalleeExport = case args.opsCalleeExport of
                       Just e -> Just e
                       Nothing -> Just (args.opsModuleB <> "_" <> args.opsNameB),
-                    S.srCalleeAdapter = args.opsCalleeAdapter
+                    S.srCalleeAdapter = args.opsCalleeAdapter,
+                    S.srEffectMap = args.opsEffectMap
                   }
              in case S.planBoundary req of
-                  S.StubRefused v reasons -> OrganPlanStubOutput v "" "" (S.renderCStubs (S.StubRefused v reasons)) []
+                  S.StubRefused v reasons -> OrganPlanStubOutput v "" "" (S.renderCStubs (S.StubRefused v reasons)) [] []
                   plan@S.StubPlan {} ->
                     OrganPlanStubOutput
                       (S.spVerdict plan)
@@ -964,8 +991,9 @@ instance Tool OrganPlanStub where
                       (T.intercalate "\n" (S.spCalleeSide plan))
                       (S.renderCStubs plan)
                       (fromMaybe [] (S.spAdapter plan))
+                      (fromMaybe [] (S.spEffectMap plan))
           _ ->
-            OrganPlanStubOutput "unlicensed-shape" "" "" ["// STUB REFUSED: unlicensed-shape", "//   one side is not a function type; there is no call to glue"] []
+            OrganPlanStubOutput "unlicensed-shape" "" "" ["// STUB REFUSED: unlicensed-shape", "//   one side is not a function type; there is no call to glue"] [] []
     where
       fetchOne conn m n mlang = do
         let sql = case mlang of

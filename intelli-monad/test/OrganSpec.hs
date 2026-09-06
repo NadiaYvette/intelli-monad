@@ -407,7 +407,7 @@ spec = do
         idx <- defaultOrganIndex
         _ <- ingestPath idx tmp
         r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
-          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "Factorial" "factorial" (Just "haskell") "factorial_rs" "factorial" (Just "rust") (Just "rs_island_fac") Nothing)
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "Factorial" "factorial" (Just "haskell") "factorial_rs" "factorial" (Just "rust") (Just "rs_island_fac") Nothing False)
         let out = organPlanStubOutput r
         -- Both fixtures use the synthetic std/int qname, which has no
         -- dictionary axiom: memberFor falls back to the dynamic member
@@ -426,7 +426,7 @@ spec = do
         idx <- defaultOrganIndex
         _ <- ingestPath idx tmp
         r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
-          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_oc" "factorial" (Just "ocaml") "factorial_rs" "factorial" (Just "rust") Nothing Nothing)
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_oc" "factorial" (Just "ocaml") "factorial_rs" "factorial" (Just "rust") Nothing Nothing False)
         let out = organPlanStubOutput r
         -- The result flows callee→caller: rust std/i64 (64 bits) into
         -- OCaml's 63-bit tagged int is a genuine narrowing.
@@ -439,7 +439,7 @@ spec = do
         idx <- defaultOrganIndex
         _ <- ingestPath idx tmp
         r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
-          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "Missing" "factorial" Nothing "factorial_rs" "factorial" (Just "rust") Nothing Nothing)
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "Missing" "factorial" Nothing "factorial_rs" "factorial" (Just "rust") Nothing Nothing False)
         let out = organPlanStubOutput r
         opsoVerdict out `shouldBe` "unlicensed-resolve"
         any ("Symbol not in the index" `T.isInfixOf`) (opsoStubs out) `shouldBe` True
@@ -452,7 +452,7 @@ spec = do
         -- the C4 projection bridges the wire's plain int64_t ABI onto
         -- the island's own (the compiler's capi header supplies StgInt).
         r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
-          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_pure" "factorial" (Just "rust") "FacPure" "factorial" (Just "haskell") (Just "hs_island_factorial") (Just "hs_island_factorial"))
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_pure" "factorial" (Just "rust") "FacPure" "factorial" (Just "haskell") (Just "hs_island_factorial") (Just "hs_island_factorial") False)
         let out = organPlanStubOutput r
             adapterTxt = T.unpack (T.unlines (opsoAdapter out))
         opsoVerdict out `shouldBe` "licensed-with-runtime-checks"
@@ -467,7 +467,7 @@ spec = do
         -- Without the request, no adapter: the default stays exactly as
         -- C2/C3 left it.
         r2 <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
-          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_pure" "factorial" (Just "rust") "FacPure" "factorial" (Just "haskell") (Just "hs_island_factorial") Nothing)
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_pure" "factorial" (Just "rust") "FacPure" "factorial" (Just "haskell") (Just "hs_island_factorial") Nothing False)
         opsoAdapter (organPlanStubOutput r2) `shouldBe` []
 
     it "emits the C4 ABI adapter for a koka callee with the runtime contract" $
@@ -475,7 +475,7 @@ spec = do
         idx <- defaultOrganIndex
         _ <- ingestPath idx tmp
         r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
-          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_pure" "factorial" (Just "rust") "factorial" "island-factorial" (Just "koka") (Just "kk_island_factorial") (Just "kk_island_factorial"))
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_pure" "factorial" (Just "rust") "factorial" "island-factorial" (Just "koka") (Just "kk_island_factorial") (Just "kk_island_factorial") False)
         let out = organPlanStubOutput r
             adapterTxt = T.unpack (T.unlines (opsoAdapter out))
         opsoVerdict out `shouldBe` "licensed-with-runtime-checks"

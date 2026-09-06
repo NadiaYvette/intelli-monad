@@ -76,6 +76,12 @@ data StubRequest = StubRequest
   , srCalleeAdapter :: Maybe Text
     -- ^ Symbol name for the generated ABI adapter (the plain @int64_t@
     -- projection the trampoline calls); @Nothing@ emits no adapter.
+  , srEffectMap :: Bool
+    -- ^ C3 effect reconciliation: request the generator's effect map
+    -- for an effectful callee. Koka islands get the @handle/try@ shim
+    -- (exceptions mapped to the wire's status sentinel) and the
+    -- adapter forwards to the mapped entry; languages without a
+    -- generatable mapping fail closed (@'spEffectMap' = Nothing@).
   }
   deriving (Eq, Show)
 
@@ -93,6 +99,11 @@ data StubPlan
         -- ^ The C4 ABI-adapter section (projecting the wire's plain
         -- @int64_t@ ABI onto the callee island's real ABI), when
         -- requested and supported. Nothing = no adapter for this plan.
+      , spEffectMap :: Maybe [Text]
+        -- ^ The C3 effect-map section: the koka-side @handle/try@ shim
+        -- text (the island's exceptions map to the wire's status
+        -- sentinel) plus the mapped-entry contract, when requested and
+        -- supported. Nothing = no effect map for this plan.
       }
   deriving (Eq, Show)
 
@@ -127,6 +138,7 @@ planBoundary req =
                 , spCallerSide = callerLines req perPos
                 , spCalleeSide = calleeLines req perPos
                 , spAdapter = emitAdapter req
+                , spEffectMap = emitEffectMap req
                 , spMarshal =
                     [posLabel p <> ": " <> conversionNote (posFrom p) (posTo p) | (p, _) <- perPos]
                       <> [ effectNote (srCallerEffects req) (srCalleeEffects req)
@@ -199,6 +211,23 @@ cTypeOf m = case (mFamily m, mWidth m) of
 -- prefixed so a leading digit cannot happen.
 safeIdent :: Text -> Text
 safeIdent t = "omni_" <> T.map (\c -> if isAlphaNum c then c else '_') t
+
+-- | Sanitize an island-side symbol without the bridge prefix (island
+-- exports are their own namespace).
+sanitizeIslandSym :: Text -> Text
+sanitizeIslandSym = T.map (\c -> if isAlphaNum c then c else '_')
+
+-- | Strip the @lang:@ prefix from a stub-request qname.
+stripLangQ :: Text -> Text
+stripLangQ r = T.drop 1 (T.dropWhile (/= ':') r)
+
+-- | Koka's C-symbol mangling of a /module/ name: an underscore doubles
+-- (module @factorial_emap@ symbols as @kk_factorial__emap_*@), as the
+-- generated header's own declarations show. Value names are a separate
+-- rule: hyphens become a single underscore (@island-factorial@ ->
+-- @island_factorial@), so mangle only where the right rule applies.
+mangleKokaModule :: Text -> Text
+mangleKokaModule = T.replace "_" "__"
 
 -- | The caller-side island wrapper. The callee is declared @extern@
 -- with the callee's ABI signature; each argument converts per its
@@ -326,32 +355,69 @@ emitAdapter req = case (calleeLang, srCalleeExport req, srCalleeAdapter req) of
       , "   and the module init/done pair; include it rather than"
       , "   re-declaring, so this adapter cannot drift from the ABI. */"
       , "#include \"" <> headerName <> "\""
-      , ""
+      ]
+      <> concat
+           [ [ "#include \"" <> mangleKokaModule (kokaModule <> "_emap") <> ".h\"" ]
+           | srEffectMap req
+             -- The effect map's shim module (compiled by koka from the
+             -- generated <module>_emap.kk) declares the mapped entry the
+             -- adapter body calls. Koka mangles the module's underscore
+             -- in the emitted header name (factorial_emap.kk compiles
+             -- to factorial__emap.h), so the include must mangle too.
+           ]
+      <>
+      [ ""
       , "static int omni_kk_rts_up = 0;"
       , "void " <> setupEntry <> "(void) {"
       , "  if (omni_kk_rts_up) return;"
       , "  omni_kk_rts_up = 1;"
       , "  kk_context_t* ctx = kk_main_start(0, NULL);"
-      , "  kk_" <> kokaModule <> "__init(ctx);"
-      , "}"
+      , "  kk_" <> mangleKokaModule kokaModule <> "__init(ctx);"
+      ]
+      <> concat [ [ "  kk_" <> mangleKokaModule (kokaModule <> "_emap") <> "__init(ctx);" ] | srEffectMap req ]
+      <>
+      [ "}"
       , ""
       , "void " <> teardownEntry <> "(void) {"
       , "  kk_context_t* ctx = kk_get_context();"
-      , "  kk_" <> kokaModule <> "__done(ctx);"
+      ]
+      <> concat [ [ "  kk_" <> mangleKokaModule (kokaModule <> "_emap") <> "__done(ctx);" ] | srEffectMap req ]
+      <>
+      [ "  kk_" <> mangleKokaModule kokaModule <> "__done(ctx);"
       , "}"
       , ""
       , "int64_t " <> entry' <> "(int64_t n) {"
-      , "  kk_context_t* ctx = kk_get_context();"
-      , "  return kk_smallint_from_integer("
-      , "      " <> realExport <> "(kk_integer_from_int64(n, ctx), ctx));"
-      , "}"
       ]
+      <> ( if srEffectMap req
+             then
+               [ "  /* C3 effect map: forwards to the mapped entry -- the koka-side"
+               , "     handle/try shim catches the island's exceptions and maps them"
+               , "     to the wire's status sentinel (min-int64); see the effect-map"
+               , "     section of this plan. The mapped entry already speaks the"
+               , "     wire's plain int64_t ABI (koka unboxes int64), so this is a"
+               , "     pure forward -- no kk_integer boxing here. */"
+               , "  return " <> callTarget <> "(n, kk_get_context());"
+               , "}"
+               ]
+             else
+               [ "  kk_context_t* ctx = kk_get_context();"
+               , "  return kk_smallint_from_integer("
+               , "      " <> callTarget <> "(kk_integer_from_int64(n, ctx), ctx));"
+               , "}"
+               ]
+         )
     where
       entry' = sanitizeIsland entry
       headerName = kokaModule <> ".h"
       setupEntry = "omni_kk_" <> kokaModule <> "_island_init"
       teardownEntry = "omni_kk_" <> kokaModule <> "_island_done"
-      realExport = "kk_" <> kokaModule <> "_" <> sanitizeIsland kokaValue
+      -- C3: with the effect map requested, the adapter forwards to the
+      -- mapped entry (the shim's handle/try does the mapping) instead
+      -- of the island's raw export. The shim lives in the generated
+      -- <module>_emap module, so its symbol gains the _emap component.
+      callTarget
+        | srEffectMap req = "kk_" <> mangleKokaModule (kokaModule <> "_emap") <> "_mapped_" <> sanitizeIsland kokaValue
+        | otherwise = "kk_" <> mangleKokaModule kokaModule <> "_" <> sanitizeIsland kokaValue
   ("haskell", Just entry, Just _) ->
     Just $
       [ "// ABI adapter: GHC island (generated, C4)"
@@ -374,10 +440,10 @@ emitAdapter req = case (calleeLang, srCalleeExport req, srCalleeAdapter req) of
   _ -> Nothing -- other languages keep the one-line FFI export convention
   where
     calleeLang = T.takeWhile (/= ':') (srCallee req)
-    sanitizeIsland = T.map (\c -> if isAlphaNum c then c else '_')
+    sanitizeIsland = sanitizeIslandSym
     -- Strip the "lang:" prefix from the callee qname before deriving
     -- module/value names (koka: and haskell: are not 2 chars).
-    stripLang r = T.drop 1 (T.dropWhile (/= ':') r)
+    stripLang = stripLangQ
     -- koka derives the module name from the source path (run_koka.sh
     -- compiles factorial.kk from the build dir => module "factorial")
     -- and value names replace '-' with '_' in the exported C symbol.
@@ -389,6 +455,58 @@ emitAdapter req = case (calleeLang, srCalleeExport req, srCalleeAdapter req) of
     (hdir, hsValue) = T.breakOnEnd "/" (stripLang (srCallee req))
     hsModule = T.dropEnd 1 hdir
     hsArgType = "HsInt64"
+
+-- | The C3 effect map: for a koka island with @srEffectMap@, emit the
+-- koka-side @handle/try@ shim source whose compiled entry has exactly
+-- the wire's plain @int64_t@ ABI — the island's exceptions map to the
+-- wire's status sentinel inside koka, so the C glue never needs a
+-- setjmp/longjmp or error-thread bridge.
+--
+-- ABI-proven live (2026-09-06, /tmp spike + run_koka_mapped.sh): koka
+-- compiles the shim's @mapped-<value>@ to
+-- @kk_<module>_mapped_<value>(int64_t.., kk_context_t*)@ — @int64@ is
+-- unboxed in koka — and the exception raised by the island's real
+-- logic surfaces as the sentinel value. The generated adapter (when
+-- requested in the same plan) forwards to this mapped entry.
+--
+-- Fail-closed: no request, a non-koka callee, or a callee whose real
+-- export is unknown yields Nothing — the generator never invents a
+-- mapping for a language whose exception ABI it cannot emit.
+emitEffectMap :: StubRequest -> Maybe [Text]
+emitEffectMap req
+  | srEffectMap req, calleeLang == "koka", Just _ <- srCalleeExport req =
+      Just $
+        [ "// C3 effect map: koka-side shim (generator-emitted)." 
+        , "// The island's real logic keeps its honest <div,exn> row; this shim"
+        , "// runs it under handle/try and maps any exception to the wire's"
+        , "// status sentinel (min-int64) -- the wire's plain int64_t ABI then"
+        , "// carries either the value or the status, with no setjmp/longjmp."
+        , "//"
+        , "// ABI proof: koka compiles mapped-" <> kokaValue <> " (module " <> kokaModule <> "_emap) to"
+        , "//   int64_t kk_" <> mangleKokaModule (kokaModule <> "_emap") <> "_mapped_" <> sanitizeIslandSym kokaValue <> "(int64_t, kk_context_t*)"
+        , "// (int64 is unboxed in koka). Compile with: koka -c -l <this file>"
+        , "// plus the island source, then init both modules' __init before use."
+        , "module " <> kokaModule <> "_emap"
+        , "import " <> kokaModule
+        , "import std/num/int64"
+        , ""
+        , "pub fun mapped-" <> kokaValue <> "(n : int64) : <div,exn> int64"
+        , "  handle/try( fn() int64(" <> kokaValue <> "(int(n))), fn(exn) min-int64 )"
+        , ""
+        , "pub fun dummy-main()"
+        , "  ()"
+        , ""
+        , "// Mapped wire entry (what the generated adapter forwards to):"
+        , "//   int64_t kk_" <> mangleKokaModule (kokaModule <> "_emap") <> "_mapped_" <> sanitizeIslandSym kokaValue <> "(int64_t n, kk_context_t* ctx)"
+        , "// Status sentinel: " <> sentinelNote
+        ]
+  | otherwise = Nothing -- no request, unknown export, or no generatable mapping
+  where
+    calleeLang = T.takeWhile (/= ':') (srCallee req)
+    (kdir, kokaValue) = T.breakOnEnd "/" (stripLangQ (srCallee req))
+    kokaModule = T.dropEnd 1 kdir
+    sentinelNote = "min-int64 (-9223372036854775808): a mapped "
+      <> kokaModule <> "/" <> kokaValue <> " result can never be this value"
 
 -- | Shared signature line, side-aware. The caller wrapper receives
 -- /caller-typed/ arguments (posFrom) and returns the caller's result
@@ -418,7 +536,9 @@ renderCStubs (StubRefused v reasons) =
 renderCStubs plan@StubPlan {}
   -- C4: the ABI-adapter section (when emitted) trails the callee side
   -- — the last box to compile, right where the island's own runtime
-  -- contract lives.
+  -- contract lives. The C3 effect-map section (when emitted) trails
+  -- the adapter: it is island-side source, compiled by the island's
+  -- own compiler, not by the host's gcc.
   | Just adapterLines <- spAdapter plan =
       spCallerSide plan
         <> [""]
@@ -428,6 +548,7 @@ renderCStubs plan@StubPlan {}
         <> spCalleeSide plan
         <> [""]
         <> adapterLines
+        <> maybe [] (("" :) . ("// ---- effect map (island-side source) ----" :) . ("" :)) (spEffectMap plan)
   | otherwise =
       spCallerSide plan
         <> [""]
@@ -435,6 +556,7 @@ renderCStubs plan@StubPlan {}
         <> ["//   " <> m | m <- spMarshal plan]
         <> [""]
         <> spCalleeSide plan
+        <> maybe [] (("" :) . ("// ---- effect map (island-side source) ----" :) . ("" :)) (spEffectMap plan)
 
 -- | Fixture pair 1: Haskell @Int#@ crossing into Rust @i64@ and back.
 -- Licensed lossless (64-bit signed both ways). Effectless both sides.
@@ -450,7 +572,8 @@ fixtureHaskellRust =
       srCallerEffects = [],
       srCalleeEffects = [],
       srCalleeExport = Nothing,
-      srCalleeAdapter = Nothing
+      srCalleeAdapter = Nothing,
+      srEffectMap = False
     }
 
 -- | Fixture pair 2: C @int32@ widened into Rust @i64@ on the argument,
@@ -467,5 +590,6 @@ fixtureCWidened =
       srCallerEffects = [],
       srCalleeEffects = [],
       srCalleeExport = Nothing,
-      srCalleeAdapter = Nothing
+      srCalleeAdapter = Nothing,
+      srEffectMap = False
     }

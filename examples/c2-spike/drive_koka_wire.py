@@ -24,6 +24,10 @@ ap.add_argument("--adapter", action="store_true",
                 help="C4: also request the generated ABI adapter (opsCalleeAdapter); "
                      "writes build-dir/kk_adapter.c instead of relying on the "
                      "hand-written factorial_kk_adapter.c")
+ap.add_argument("--effect-map", action="store_true",
+                help="C3: also request the effect map (opsEffectMap); the island-side "
+                     "handle/try shim lands in build-dir/factorial_emap.kk and the "
+                     "generated adapter (if requested) forwards to the mapped entry")
 args = ap.parse_args()
 
 out = pathlib.Path(args.build_dir)
@@ -114,7 +118,8 @@ send({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
           "opsModuleA": "factorial_rs", "opsNameA": "factorial", "opsLangA": "rust",
           "opsModuleB": "factorial", "opsNameB": "island-factorial", "opsLangB": "koka",
           "opsCalleeExport": "kk_island_factorial",
-          **({"opsCalleeAdapter": "kk_island_factorial"} if args.adapter else {})}}})
+          **({"opsCalleeAdapter": "kk_island_factorial"} if args.adapter else {}),
+          **({"opsEffectMap": True} if args.effect_map else {})}}})
 plan = json.loads(recv()["result"]["content"][0]["text"])
 p.terminate()
 
@@ -130,6 +135,12 @@ if plan.get("opsoAdapter"):
     adapter_text = adapter_lines if isinstance(adapter_lines, str) else "\n".join(adapter_lines)
     (out / "kk_adapter.c").write_text(adapter_text + "\n")
     print("wrote", out / "kk_adapter.c", "(C4 generated ABI adapter)")
+if plan.get("opsoEffectMap"):
+    # The island-side effect-map shim: koka source, compiled by koka.
+    emap_lines = plan["opsoEffectMap"]
+    emap_text = emap_lines if isinstance(emap_lines, str) else "\n".join(emap_lines)
+    (out / "factorial_emap.kk").write_text(emap_text + "\n")
+    print("wrote", out / "factorial_emap.kk", "(C3 effect-map shim)")
 if plan["opsoVerdict"] != "licensed-lossless":
     print("UNEXPECTED VERDICT — full plan:", json.dumps(plan, indent=2))
 sys.exit(0 if plan["opsoVerdict"] == "licensed-lossless" else 1)
