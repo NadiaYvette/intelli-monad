@@ -26,10 +26,13 @@ import IntelliMonad.Tools.OrganBank.Stubs
   )
 
 m :: Family -> Maybe Int -> Text -> Member
-m f w note = Member f w note
+m f w note = Member f w Nothing note
 
 spec :: Spec
-spec = do
+spec = specMain >> specC5
+
+specMain :: Spec
+specMain = do
   describe "runInterop: the fixture pair (haskell Int# <-> rust i64)" $ do
     it "verifies on its own evidence" $
       ioVerdict (runInterop fixtureHaskellRust) `shouldBe` "pmwa-verified"
@@ -46,10 +49,15 @@ spec = do
 
   describe "runInterop: leg 1, representation" $ do
     it "refuses when a position leaves the scalar wire domain" $ do
+      -- The big side carries a C5 declared bound so the dictionary
+      -- licenses the plan (licensed-bounded) and the representation
+      -- leg is what refuses: the wire renders boxed values as void*.
+      -- (Without the bound the dictionary's unlicensed-unbounded fires
+      -- first — the earlier of two honest refusals.)
       let req =
             fixtureHaskellRust
               { srPositions =
-                  [ Position "arg 0" (m FBigSigned Nothing "GHC Integer") (m FSigned (Just 64) "std/i64"),
+                  [ Position "arg 0" (Member FBigSigned (Just 64) (Just 60) "GHC Integer") (m FSigned (Just 64) "std/i64"),
                     Position "result" (m FSigned (Just 64) "std/i64") (m FSigned (Just 64) "ghc-prim/Int#")
                   ]
               }
@@ -90,3 +98,33 @@ spec = do
     it "verifies a pure crossing with no map requested" $ do
       ioEffects (runInterop fixtureHaskellRust)
         `shouldBe` Just "verified: effect rows empty on both sides (pure crossing)"
+
+-- C5: bounded positions keep the claim scalar but mark where the
+-- witness stops. Bounds inside the witness domain verify; bounds
+-- beyond it rest on the crossing's generated runtime checks and stay
+-- unproven — never silently dropped, never over-claimed.
+specC5 :: Spec
+specC5 = describe "runInterop: C5 bounded positions" $ do
+  it "a bound inside the witness domain verifies" $ do
+    let req =
+          fixtureHaskellRust
+            { srPositions =
+                [ Position "arg 0" (m FSigned (Just 64) "std/i64") (Member FSigned (Just 64) (Just 30) "koka int under contract"),
+                  Position "result" (Member FSigned (Just 64) (Just 30) "koka int under contract") (m FSigned (Just 64) "std/i64")
+                ]
+            }
+        o = runInterop req
+    ioVerdict o `shouldBe` "pmwa-verified"
+    ioRepresentation o `shouldSatisfy` maybe False ("verified: " `T.isPrefixOf`)
+  it "a bound beyond the witness domain is unproven, carried by the runtime checks" $ do
+    let req =
+          fixtureHaskellRust
+            { srPositions =
+                [ Position "arg 0" (m FSigned (Just 64) "std/i64") (Member FSigned (Just 64) (Just 60) "koka int under contract"),
+                  Position "result" (Member FSigned (Just 64) (Just 60) "koka int under contract") (m FSigned (Just 64) "std/i64")
+                ]
+            }
+        o = runInterop req
+    ioVerdict o `shouldBe` "pmwa-unproven-representation"
+    ioRepresentation o `shouldSatisfy` maybe False ("unproven: " `T.isPrefixOf`)
+    ioConvention o `shouldSatisfy` maybe False ("verified: " `T.isPrefixOf`)

@@ -364,3 +364,46 @@ evidence and a declared witness domain (`pmwaWitnessDomain = 2^40`):
 fixed-width scalars are exhausted exactly (the wire ABI is total over
 them); values beyond the bound are outside the claim, which is what
 keeps the claim true. `InteropSpec.hs` pins the verdict matrix.
+
+### 4. C5: the bounded-value marshaling contract (2026-09-07)
+
+The last refusal that cost real crossings was unbounded-big vs
+fixed-width: `FBigSigned` into `FSigned 64` died as
+`unlicensed-missing-contract` even when both sides could have *agreed*
+to a smaller domain. C5 makes that agreement first-class:
+
+- **Dictionary**: `Member` gains `mBound :: Maybe Int` (the declared
+  contract |v| < 2^bound). `license` routes through a bound gate that
+  participates *only when a bound is explicitly declared* — no-bound
+  crossings behave byte-identically to C4. Verdicts:
+  `licensed-bounded` (checked crossing; sentinel headroom must exist),
+  narrowing rescue by declared source domain (by construction, no
+  runtime check), `unlicensed-bound-headroom` (declared bound leaves
+  no sentinel headroom), `unlicensed-range` (bound but no width).
+- **Generated glue**: the koka effect-map shim gains exact arg/result
+  guards when the callee members declare bounds — the checks run in
+  koka's arbitrary-precision `int` (no C-side overflow risk) and
+  violations throw, riding the existing handle/try → sentinel path.
+  The OCaml adapter checks *before* `Val_long` boxing (boxing would
+  silently drop the top bits) and returns the wire sentinel directly.
+  Guard semantics: |v| < 2^b exactly — ±2^b violates, ±(2^b − 1)
+  passes (the `<` vs `<=` off-by-one was caught live by the OCaml
+  demo's boundary checks).
+- **Wire**: `organ_plan_stub` surfaces the verdict unchanged — a
+  bounded crossing plans as `licensed-bounded` with the guards in the
+  emitted shim; nothing else about the contract changed.
+
+Live proofs (`examples/c2-spike/run_bounded.sh`,
+`run_ocaml.sh`): 10!/19! return real values through the checked
+chain; 20! (result ≥ 2^60) and ±2^b arguments surface
+`-9223372036854775808`; −1 passes the guard and computes. The OCaml
+gold adds a fourth live runtime (C host + OCaml + rust in one binary,
+ocamlopt driving the link per organ-bank `doc/abi-notes/ocaml.md` §4).
+
+**Honest constraint (4-runtime host)**: OCaml's startup object
+(`caml_globals`/`caml_frametable`/`caml_program`) only exists inside
+ocamlopt's own link step and is deleted afterward — no flag keeps it.
+A single binary with GHC + OCaml + kklib + rust would need that object
+captured by poisoning the link or replicating the startup codegen, so
+the OCaml gold runs in a C-host + OCaml + rust process (ocamlopt as
+link driver) instead of joining `run_multi.sh`'s three-runtime host.

@@ -434,6 +434,61 @@ emitAdapter req = case (calleeLang, srCalleeExport req, srCalleeAdapter req) of
       , "  return (int64_t) " <> hsModule <> "_" <> hsValue <> "((" <> hsArgType <> ") n);"
       , "}"
       ]
+  ("ocaml", Just entry, Just _) ->
+    Just $
+      [ "// ABI adapter: OCaml island (generated, C4)"
+      , "// Projects the wire's plain int64_t ABI onto OCaml's 63-bit tagged"
+      , "// int: boxing is Val_long ((n << 1) + 1), unboxing Long_val. The"
+      , "// island registers its entry via Callback.register; the adapter"
+      , "// fetches the closure with caml_named_value and calls caml_callback."
+      , "// The OCaml RTS is brought up once (caml_main) and lives until"
+      , "// process exit -- there is no done call. ABI-proven live 2026-09-07"
+      , "// (see organ-bank doc/abi-notes/ocaml.md); the host links via"
+      , "// ocamlopt, whose C main wins over the runtime's archive member."
+      , "#include <stdint.h>"
+      , "#include <caml/mlvalues.h>"
+      , "#include <caml/callback.h>"
+      , ""
+      , "static int omni_oc_rts_up = 0;"
+      , "void " <> ocSetupEntry <> "(void) {"
+      , "  if (omni_oc_rts_up) return;"
+      , "  omni_oc_rts_up = 1;"
+      , "  char* argv[2] = { (char*)\"" <> ocModule <> "\", NULL };"
+      , "  caml_main(argv);"
+      , "}"
+      , ""
+      , "void " <> ocTeardownEntry <> "(void) {"
+      , "  /* OCaml RTS lives until process exit; nothing to tear down. */"
+      , "}"
+      , ""
+      , "int64_t " <> sanitizeIsland entry <> "(int64_t n) {"
+      ]
+      <> ocGuard
+      <>
+      [ "  value r = caml_callback(*caml_named_value(\"" <> ocValue <> "\"), Val_long(n));"
+      , "  return (int64_t) Long_val(r);"
+      , "}"
+      ]
+    where
+      (ocdir, ocValue) = T.breakOnEnd "/" (stripLang (srCallee req))
+      ocModule = T.dropEnd 1 ocdir
+      ocSetupEntry = "omni_oc_" <> ocModule <> "_island_init"
+      ocTeardownEntry = "omni_oc_" <> ocModule <> "_island_done"
+      -- C5 bounded contract: when the island's argument declares a
+      -- bound, the adapter checks it BEFORE boxing. The check must run
+      -- here because Val_long silently drops the top bits of a wider
+      -- int64 -- the exact silent truncation the license forbids. The
+      -- literal is precomputed (no overflow: bounds <= 62 fit int64).
+      ocGuard = case [b | p <- srPositions req, posLabel p /= "result", Just b <- [mBound (posTo p)]] of
+        (b : _) ->
+          let lit = T.pack (show (2 ^ b :: Integer))
+           in [ "  /* C5 bounded contract: the island declared |v| < 2^" <> lit' <> ". */"
+              , "  if (n >= " <> lit <> " || n <= 0 - " <> lit <> ") {"
+              , "    return (-0x7fffffffffffffffLL - 1); /* wire status sentinel */"
+              , "  }"
+              ]
+          where lit' = T.pack (show b)
+        [] -> []
   -- Fail-closed: no export to project onto, no adapter request, or a
   -- language without a known projection keeps the one-line FFI export
   -- convention from C2/C3.
@@ -469,6 +524,15 @@ emitAdapter req = case (calleeLang, srCalleeExport req, srCalleeAdapter req) of
 -- logic surfaces as the sentinel value. The generated adapter (when
 -- requested in the same plan) forwards to this mapped entry.
 --
+-- C5 bounded marshaling: when any callee-side member declares 'mBound'
+-- (the bounded-license contract), the shim's checks run in koka's
+-- arbitrary-precision @int@ — exact, no C-side overflow risk — throwing
+-- on @|v| >= 2^bound@ so the violation rides the same @handle/try@ →
+-- sentinel path as any island exception. ABI-proven live 2026-09-07
+-- (/tmp/bprobe2): the checked shim compiles to the same pure wire ABI
+-- and a host observes the sentinel for an out-of-bound arg AND an
+-- out-of-bound result while in-range calls return real values.
+--
 -- Fail-closed: no request, a non-koka callee, or a callee whose real
 -- export is unknown yields Nothing — the generator never invents a
 -- mapping for a language whose exception ABI it cannot emit.
@@ -486,20 +550,51 @@ emitEffectMap req
         , "//   int64_t kk_" <> mangleKokaModule (kokaModule <> "_emap") <> "_mapped_" <> sanitizeIslandSym kokaValue <> "(int64_t, kk_context_t*)"
         , "// (int64 is unboxed in koka). Compile with: koka -c -l <this file>"
         , "// plus the island source, then init both modules' __init before use."
-        , "module " <> kokaModule <> "_emap"
-        , "import " <> kokaModule
-        , "import std/num/int64"
-        , ""
-        , "pub fun mapped-" <> kokaValue <> "(n : int64) : <div,exn> int64"
-        , "  handle/try( fn() int64(" <> kokaValue <> "(int(n))), fn(exn) min-int64 )"
-        , ""
-        , "pub fun dummy-main()"
-        , "  ()"
-        , ""
-        , "// Mapped wire entry (what the generated adapter forwards to):"
-        , "//   int64_t kk_" <> mangleKokaModule (kokaModule <> "_emap") <> "_mapped_" <> sanitizeIslandSym kokaValue <> "(int64_t n, kk_context_t* ctx)"
-        , "// Status sentinel: " <> sentinelNote
         ]
+        <> ( case guards of
+
+               [] ->
+                 [ "module " <> kokaModule <> "_emap"
+                 , "import " <> kokaModule
+                 , "import std/num/int64"
+                 , ""
+                 , "pub fun mapped-" <> kokaValue <> "(n : int64) : <div,exn> int64"
+                 , "  handle/try( fn() int64(" <> kokaValue <> "(int(n))), fn(exn) min-int64 )"
+                 ]
+               _ ->
+                 [ "// C5 bounded contract: guards run in koka's arbitrary-precision int"
+                 , "// (exact); a violation throws and maps to the sentinel like any"
+                 , "// island exception. ABI proof 2026-09-07: same pure wire entry."
+                 , "module " <> kokaModule <> "_emap"
+                 , "import " <> kokaModule
+                 , "import std/num/int64"
+                 , ""
+                 , "pub fun mapped-" <> kokaValue <> "(n : int64) : <div,exn> int64"
+                 , "  handle/try("
+                 , "    fn()"
+                 , "      {"
+                 ]
+                 <> concat [bcheckLines lbl b | (lbl, b) <- guards]
+                 <> concat
+                      [ [ "        val a0 = bcheck_" <> sanitizeIslandSym lbl <> "(int(n))" ]
+                      | (lbl, _) <- guards
+                      , lbl /= "result"
+                      ]
+                 <> [ callLine
+                    , "        std/num/int64/int64(" <> wrapResult <> ")"
+                    , "      },"
+                    , "    fn(exn) min-int64"
+                    , "  )"
+                 ]
+           )
+        <> [ ""
+           , "pub fun dummy-main()"
+           , "  ()"
+           , ""
+           , "// Mapped wire entry (what the generated adapter forwards to):"
+           , "//   int64_t kk_" <> mangleKokaModule (kokaModule <> "_emap") <> "_mapped_" <> sanitizeIslandSym kokaValue <> "(int64_t n, kk_context_t* ctx)"
+           , "// Status sentinel: " <> sentinelNote
+           ]
   | otherwise = Nothing -- no request, unknown export, or no generatable mapping
   where
     calleeLang = T.takeWhile (/= ':') (srCallee req)
@@ -507,6 +602,37 @@ emitEffectMap req
     kokaModule = T.dropEnd 1 kdir
     sentinelNote = "min-int64 (-9223372036854775808): a mapped "
       <> kokaModule <> "/" <> kokaValue <> " result can never be this value"
+    -- C5: callee-side members carrying a declared bound. Args are
+    -- callee-typed (posTo), the result is the callee's (posFrom) —
+    -- the same side convention as 'signature'.
+    guards =
+      [ (posLabel p, b)
+      | p <- srPositions req
+      , let m = if posLabel p == "result" then posFrom p else posTo p
+      , Just b <- [mBound m]
+      ]
+    -- One exact check per guarded position: a nested koka function
+    -- throwing on |x| >= 2^bound (bound literal precomputed — koka
+    -- rejects a unary minus glued to an integer literal).
+    bcheckLines lbl b =
+      [ "        fun bcheck_" <> sanitizeIslandSym lbl <> "(x : int) : <exn> int"
+      , "          if (x >= " <> boundLit <> " || x <= 0 - " <> boundLit <> ") then throw(\"bound violation: |" <> lbl <> "| >= 2^" <> T.pack (show b) <> "\")"
+      , "          else x"
+      ]
+      where boundLit = T.pack (show (2 ^ b :: Integer))
+    -- Guarded arg flow: the wire's single-arg convention (arg 0 as
+    -- 'n') feeds the arg's check into 'a0'; an unguarded arg passes
+    -- through. The call consumes 'a0' exactly once — the check never
+    -- runs twice.
+    callArg = case [lbl | (lbl, _) <- guards, lbl /= "result"] of
+      (_ : _) -> "a0" -- 'a0' is already the checked value; never re-check
+      [] -> "int(n)"
+    callLine = "        val r0 = " <> kokaValue <> "(" <> callArg <> ")"
+    -- Guarded result flow: the checked call result feeds the result's
+    -- check; an unguarded result flows straight to the conversion.
+    wrapResult = case [b | ("result", b) <- guards] of
+      (_ : _) -> "bcheck_result(r0)"
+      [] -> "r0"
 
 -- | Shared signature line, side-aware. The caller wrapper receives
 -- /caller-typed/ arguments (posFrom) and returns the caller's result
@@ -566,8 +692,8 @@ fixtureHaskellRust =
     { srCaller = "haskell:Factorial/factorial",
       srCallee = "rust:factorial/factorial",
       srPositions =
-        [ Position "arg 0" (Member FSigned (Just 64) "ghc-prim/Int#") (Member FSigned (Just 64) "std/i64"),
-          Position "result" (Member FSigned (Just 64) "std/i64") (Member FSigned (Just 64) "ghc-prim/Int#")
+        [ Position "arg 0" (Member FSigned (Just 64) Nothing "ghc-prim/Int#") (Member FSigned (Just 64) Nothing "std/i64"),
+          Position "result" (Member FSigned (Just 64) Nothing "std/i64") (Member FSigned (Just 64) Nothing "ghc-prim/Int#")
         ],
       srCallerEffects = [],
       srCalleeEffects = [],
@@ -584,8 +710,8 @@ fixtureCWidened =
     { srCaller = "c:factorial/factorial",
       srCallee = "rust:factorial/factorial",
       srPositions =
-        [ Position "arg 0" (Member FSigned (Just 32) "std/int32") (Member FSigned (Just 64) "std/i64"),
-          Position "result" (Member FSigned (Just 32) "std/i32") (Member FSigned (Just 32) "std/int32")
+        [ Position "arg 0" (Member FSigned (Just 32) Nothing "std/int32") (Member FSigned (Just 64) Nothing "std/i64"),
+          Position "result" (Member FSigned (Just 32) Nothing "std/i32") (Member FSigned (Just 32) Nothing "std/int32")
         ],
       srCallerEffects = [],
       srCalleeEffects = [],

@@ -33,6 +33,7 @@ import qualified BridgeSpec
 import qualified OrganSpec
 import qualified DictionarySpec
 import qualified StubSpec
+import qualified InteropSpec
 
 -- Test types for enum (all nullary constructors)
 data Color = Red | Green | Blue
@@ -111,6 +112,7 @@ main = hspec $ do
   OrganSpec.spec
   DictionarySpec.spec
   StubSpec.spec
+  InteropSpec.spec
   BridgeSpec.spec
 
   describe "JSON Schema Generation for Sum Types" $ do

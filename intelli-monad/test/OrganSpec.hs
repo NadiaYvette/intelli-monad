@@ -193,6 +193,111 @@ kokaDoc =
     kokaBare :: Text -> Text -> A.Value
     kokaBare m n = A.object ["module" A..= m, "name" A..= A.object ["text" A..= n]]
 
+-- | The C5 bounded-contract pair: a rust std/i64 caller (pure — the
+-- demo direction's real caller type, dictionary-known) and the koka
+-- island whose arg/result qname is the dictionary's declared-bound
+-- member std/core/int/bounded60 (|v| < 2^60 over the unboxed int64 ABI).
+-- The caller module is distinct from 'rustPureDoc' so the two rust
+-- fixtures never collide in the shared index.
+rustI64Doc :: A.Value
+rustI64Doc =
+  A.object
+    [ "schema_version" A..= ("1.0.0" :: Text),
+      "metadata"
+        A..= A.object
+          [ "source_language" A..= ("rust" :: Text),
+            "shim_version" A..= ("0.1.0" :: Text)
+          ],
+      "module"
+        A..= A.object
+          [ "name" A..= ("factorial_rs_i64" :: Text),
+            "definitions"
+              A..= [ def "factorial_rs_i64" "factorial" "public"
+                       (A.object
+                          [ "fn" A..= A.object
+                              [ "args" A..= [A.object ["multiplicity" A..= ("many" :: Text), "type" A..= i64Con "std" "i64"]],
+                                "effect" A..= A.object ["effects" A..= [i64Bare "std" "pure"]],
+                                "result" A..= i64Con "std" "i64"
+                              ]
+                          ])
+                   ],
+            "data_types" A..= ([] :: [A.Value]),
+            "effect_decls" A..= ([] :: [A.Value])
+          ]
+    ]
+  where
+    i64Con :: Text -> Text -> A.Value
+    i64Con m n = A.object ["con" A..= A.object ["qname" A..= i64Bare m n]]
+    i64Bare :: Text -> Text -> A.Value
+    i64Bare m n = A.object ["module" A..= m, "name" A..= A.object ["text" A..= n]]
+
+-- | The C5 bounded-contract koka document: same island shape as
+-- 'kokaDoc' but its arg/result qname is the dictionary's declared-bound
+-- member std/core/int/bounded60 (|v| < 2^60 over the unboxed int64 ABI).
+kokaBoundedDoc :: A.Value
+kokaBoundedDoc =
+  A.object
+    [ "schema_version" A..= ("1.0.0" :: Text),
+      "metadata"
+        A..= A.object
+          [ "source_language" A..= ("koka" :: Text),
+            "shim_version" A..= ("0.1.0" :: Text)
+          ],
+      "module"
+        A..= A.object
+          [ "name" A..= ("factorial" :: Text),
+            "definitions"
+              A..= [ def "factorial" "bounded-factorial" "public"
+                       (A.object
+                          [ "fn" A..= A.object
+                              [ "args" A..= [A.object ["multiplicity" A..= ("many" :: Text), "type" A..= kokaCon "std/core/int" "bounded60"]],
+                                "effect" A..= A.object ["effects" A..= [kokaBare "std/core" "div", kokaBare "std/core" "exn"]],
+                                "result" A..= kokaCon "std/core/int" "bounded60"
+                              ]
+                          ])
+                   ],
+            "data_types" A..= ([] :: [A.Value]),
+            "effect_decls" A..= ([] :: [A.Value])
+          ]
+    ]
+  where
+    kokaCon :: Text -> Text -> A.Value
+    kokaCon m n = A.object ["con" A..= A.object ["qname" A..= kokaBare m n]]
+    kokaBare :: Text -> Text -> A.Value
+    kokaBare m n = A.object ["module" A..= m, "name" A..= A.object ["text" A..= n]]
+
+-- | The C5 OCaml island document: Stdlib/int/bounded61 (declared
+-- bound over the 63-bit tagged int) on arg and result, no effects.
+ocamlBoundedDoc :: A.Value
+ocamlBoundedDoc =
+  A.object
+    [ "schema_version" A..= ("1.0.0" :: Text),
+      "metadata"
+        A..= A.object
+          [ "source_language" A..= ("ocaml" :: Text),
+            "shim_version" A..= ("0.1.0" :: Text)
+          ],
+      "module"
+        A..= A.object
+          [ "name" A..= ("factorial_oc" :: Text),
+            "definitions"
+              A..= [ def "factorial_oc" "island-factorial" "public"
+                       (A.object
+                          [ "fn" A..= A.object
+                              [ "args" A..= [A.object ["multiplicity" A..= ("many" :: Text), "type" A..= ocCon "Stdlib/int" "bounded61"]],
+                                "effect" A..= A.object ["effects" A..= ([] :: [A.Value])],
+                                "result" A..= ocCon "Stdlib/int" "bounded61"
+                              ]
+                          ])
+                   ],
+            "data_types" A..= ([] :: [A.Value]),
+            "effect_decls" A..= ([] :: [A.Value])
+          ]
+    ]
+  where
+    ocCon :: Text -> Text -> A.Value
+    ocCon m n = A.object ["con" A..= A.object ["qname" A..= A.object ["module" A..= m, "name" A..= A.object ["text" A..= n]]]]
+
 withFreshIndex :: (FilePath -> IO a) -> IO a
 withFreshIndex act = do
   tmpRoot <- getTemporaryDirectory
@@ -203,11 +308,17 @@ withFreshIndex act = do
           f3 = tmp ++ "/factorial_pure.json"
           f4 = tmp ++ "/factorial_kk.json"
           f5 = tmp ++ "/factorial_rs_pure.json"
+          f6 = tmp ++ "/factorial_kk_bounded.json"
+          f7 = tmp ++ "/factorial_rs_i64.json"
+          f8 = tmp ++ "/factorial_oc_bounded.json"
       A.encodeFile f1 sampleDoc
       A.encodeFile f2 rustDoc
       A.encodeFile f3 haskellPureDoc
       A.encodeFile f4 kokaDoc
       A.encodeFile f5 rustPureDoc
+      A.encodeFile f6 kokaBoundedDoc
+      A.encodeFile f7 rustI64Doc
+      A.encodeFile f8 ocamlBoundedDoc
       old <- lookupEnv "ORGAN_INDEX"
       setEnv "ORGAN_INDEX" (tmp ++ "/index.db")
       r <- act tmp
@@ -240,11 +351,11 @@ readDiagnostics idx =
 spec :: Spec
 spec = do
   describe "ingestPath" $ do
-    it "ingests both documents and reports zero failures" $ do
+    it "ingests all fixture documents and reports zero failures" $ do
       (ok, bad, errs) <- withFreshIndex $ \tmp -> do
         idx <- defaultOrganIndex
         ingestPath idx tmp
-      ok `shouldBe` 5
+      ok `shouldBe` 8
       bad `shouldBe` 0
       errs `shouldBe` []
 
@@ -253,7 +364,7 @@ spec = do
         writeFile (tmp ++ "/broken.json") "{not json"
         idx <- defaultOrganIndex
         ingestPath idx tmp
-      ok `shouldBe` 5
+      ok `shouldBe` 8
       bad `shouldBe` 1
 
   describe "diag envelope ingestion (organ-extract --diag)" $ do
@@ -493,6 +604,54 @@ spec = do
         adapterTxt `shouldSatisfy` not . T.isInfixOf "kk_factorial_kk_island_factorial" . T.pack
         -- The koka callee-side wrapper documents the delegated contract.
         T.unpack (opsoCallee out) `shouldContain` "kk_main_start"
+
+    it "emits the C5 bounded-contract shim for a declared-bound koka callee" $
+      withFreshIndex $ \tmp -> do
+        idx <- defaultOrganIndex
+        _ <- ingestPath idx tmp
+        -- the demo direction's REAL caller type: rust std/i64 (pure),
+        -- dictionary-known, flowing into the bounded koka island.
+        r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_rs_i64" "factorial" (Just "rust") "factorial" "bounded-factorial" (Just "koka") (Just "kk_bounded_island") (Just "kk_bounded_island") True)
+        let out = organPlanStubOutput r
+            emapTxt = T.unpack (T.unlines (opsoEffectMap out))
+        -- The declared bound converts the crossing to licensed-bounded.
+        opsoVerdict out `shouldBe` "licensed-bounded"
+        -- The shim is the checked form: exact koka-side guards on the
+        -- arg and the result, wired through the C3 handle/try sentinel.
+        emapTxt `shouldContain` "bcheck_arg_1"
+        emapTxt `shouldContain` "bcheck_result"
+        emapTxt `shouldContain` "1152921504606846976" -- 2^60 literal
+        emapTxt `shouldContain` "bound violation"
+        emapTxt `shouldContain` "handle/try("
+        emapTxt `shouldContain` "min-int64"
+        -- The trampoline targets the adapter's entry; the adapter (when
+        -- requested) forwards to the mapped checked entry.
+        T.unpack (opsoCallee out) `shouldContain` "kk_bounded_island"
+
+    it "emits the C5 OCaml adapter with the pre-boxing bound check" $
+      withFreshIndex $ \tmp -> do
+        idx <- defaultOrganIndex
+        _ <- ingestPath idx tmp
+        -- rust std/i64 caller -> OCaml bounded61 island: the declared
+        -- bound licenses the crossing that unbounded Stdlib/int would
+        -- refuse as a narrowing, and the adapter must check BEFORE
+        -- Val_long boxing (which would silently drop the top bits).
+        r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_rs_i64" "factorial" (Just "rust") "factorial_oc" "island-factorial" (Just "ocaml") (Just "ocaml_island_factorial") (Just "ocaml_island_factorial") False)
+        let out = organPlanStubOutput r
+            adapterTxt = T.unpack (T.unlines (opsoAdapter out))
+        opsoVerdict out `shouldBe` "licensed-bounded"
+        adapterTxt `shouldContain` "// ABI adapter: OCaml island (generated, C4)"
+        adapterTxt `shouldContain` "caml_callback"
+        -- The bound check guards before the box, and a violation
+        -- returns the wire's status sentinel.
+        adapterTxt `shouldContain` "2305843009213693952" -- 2^61 literal
+        adapterTxt `shouldContain` "wire status sentinel"
+        adapterTxt `shouldContain` "ocaml_island_factorial(int64_t n)"
+        -- The RTS lifecycle entries follow the namespace convention.
+        adapterTxt `shouldContain` "omni_oc_factorial_oc_island_init"
+        adapterTxt `shouldContain` "caml_main"
 
   where
     sameArgs ta tb =

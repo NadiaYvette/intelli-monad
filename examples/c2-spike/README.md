@@ -188,3 +188,38 @@ convention (checked against what the plan actually emitted), effects
 declared witness domain (`2^40`: fixed-width scalars are exhausted
 exactly; anything beyond is outside the claim). `test/InteropSpec.hs`
 pins the matrix.
+
+## C5: the bounded-value marshaling contract
+
+`run_bounded.sh` — the same koka island, but the wire doc's qnames
+carry the dictionary's declared-bound member `std/core/int/bounded60`
+(|v| < 2^60). The verdict becomes `licensed-bounded`, the generated
+`factorial_emap.kk` gains exact arg/result guards (they run inside
+koka's arbitrary-precision int — a violation throws and maps to the
+sentinel like any island exception), and the host exercises all four
+paths: in-range 10!/19! return real values, the result violation
+(20! ≥ 2^60) and the arg violation surface `-9223372036854775808`.
+
+`drive_koka_wire.py --bounded` is the only difference from the C3
+demo — the island source, glue, and adapter are identical.
+
+## The OCaml gold (`run_ocaml.sh`)
+
+A fourth live runtime: rust island (std/i64) → wire glue → generated
+OCaml ABI adapter → `caml_callback` → OCaml island
+(`factorial_oc.ml`, registered via `Callback.register`). The island's
+types carry the declared-bound member `Stdlib/int/bounded61`, so the
+adapter checks the bound BEFORE `Val_long` boxing (boxing would
+silently drop the top bits of a wider int64) and returns the wire
+sentinel on violation. The result direction needs no check: OCaml's
+63-bit int into the wire's int64 is a widening — 20! returns a real
+value.
+
+Link contract (ABI-proven, organ-bank `doc/abi-notes/ocaml.md` §4):
+**ocamlopt drives the link** — its C main wins over the runtime's
+archive member, the OCaml-side counterpart of `ghc -no-hs-main`.
+Manual gcc linking against `libasmrun.a` fails: `caml_globals`/
+`caml_frametable` live in ocamlopt's generated startup object, which
+is deleted even on success. That constraint is why the OCaml gold is
+a C-host + OCaml + rust process rather than a fourth island inside
+`run_multi.sh` (see the honest note in `doc/phase-c-transplant.md`).

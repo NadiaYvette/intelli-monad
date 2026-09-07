@@ -25,8 +25,8 @@ spec = do
 
     it "refuses a narrowing crossing with the cited axioms" $ do
       let req = StubRequest "haskell:Factorial/factorial" "c:factorial/factorial"
-              [ Position "arg 0" (Member FSigned (Just 64) "ghc-prim/Int#") (Member FSigned (Just 32) "std/int32")
-              , Position "result" (Member FSigned (Just 32) "std/int32") (Member FSigned (Just 64) "ghc-prim/Int#")
+              [ Position "arg 0" (Member FSigned (Just 64) Nothing "ghc-prim/Int#") (Member FSigned (Just 32) Nothing "std/int32")
+              , Position "result" (Member FSigned (Just 32) Nothing "std/int32") (Member FSigned (Just 64) Nothing "ghc-prim/Int#")
               ] [] [] Nothing Nothing False
           plan = planBoundary req
       spVerdict plan `shouldBe` "unlicensed-narrowing"
@@ -42,8 +42,8 @@ spec = do
 
     it "plans a dynamic crossing as runtime-checks" $ do
       let req = StubRequest "prolog:factorial/factorial" "haskell:Factorial/factorial"
-              [ Position "arg 0" (Member FDynamic Nothing "any") (Member FSigned (Just 64) "ghc-prim/Int#")
-              , Position "result" (Member FSigned (Just 64) "ghc-prim/Int#") (Member FDynamic Nothing "any")
+              [ Position "arg 0" (Member FDynamic Nothing Nothing "any") (Member FSigned (Just 64) Nothing "ghc-prim/Int#")
+              , Position "result" (Member FSigned (Just 64) Nothing "ghc-prim/Int#") (Member FDynamic Nothing Nothing "any")
               ] [] [] Nothing Nothing False
       spVerdict (planBoundary req) `shouldBe` "licensed-with-runtime-checks"
 
@@ -96,7 +96,7 @@ spec = do
 
     it "renders refusals as comment-only debris" $ do
       let req = StubRequest "haskell:x" "c:y"
-              [ Position "arg 0" (Member FSigned (Just 64) "ghc-prim/Int#") (Member FSigned (Just 32) "std/int32") ] [] [] Nothing Nothing False
+              [ Position "arg 0" (Member FSigned (Just 64) Nothing "ghc-prim/Int#") (Member FSigned (Just 32) Nothing "std/int32") ] [] [] Nothing Nothing False
           ls = renderCStubs (planBoundary req)
       ls `shouldSatisfy` all (T.isPrefixOf "//")
       ls `shouldSatisfy` any (T.isInfixOf "STUB REFUSED")
@@ -239,23 +239,23 @@ spec = do
       -- values on both sides (FBigUnsigned both ways). The result of a
       -- SIGNED callee into a Nat caller would be overflow-domain.
       let req = StubRequest "lean4:N/Nat" "haskell:GMP/Natural"
-              [ Position "arg 0" (Member FBigUnsigned Nothing "Lean/Nat") (Member FBigUnsigned Nothing "GMP/Natural")
-              , Position "result" (Member FBigUnsigned Nothing "GMP/Natural") (Member FBigUnsigned Nothing "Lean/Nat")
+              [ Position "arg 0" (Member FBigUnsigned Nothing Nothing "Lean/Nat") (Member FBigUnsigned Nothing Nothing "GMP/Natural")
+              , Position "result" (Member FBigUnsigned Nothing Nothing "GMP/Natural") (Member FBigUnsigned Nothing Nothing "Lean/Nat")
               ] [] [] Nothing Nothing False
       spVerdict (planBoundary req) `shouldBe` "licensed-lossless"
       spMarshal (planBoundary req) `shouldSatisfy` any ("box swap" `T.isInfixOf`)
 
     it "licenses Nat into signed bigint on the argument (zero-extend note)" $ do
       let req = StubRequest "lean4:N/Nat" "haskell:GMP/Integer"
-              [ Position "arg 0" (Member FBigUnsigned Nothing "Lean/Nat") (Member FBigSigned Nothing "GMP/Integer")
-              , Position "result" (Member FBigSigned Nothing "GMP/Integer") (Member FBigSigned Nothing "GMP/Integer")
+              [ Position "arg 0" (Member FBigUnsigned Nothing Nothing "Lean/Nat") (Member FBigSigned Nothing Nothing "GMP/Integer")
+              , Position "result" (Member FBigSigned Nothing Nothing "GMP/Integer") (Member FBigSigned Nothing Nothing "GMP/Integer")
               ] [] [] Nothing Nothing False
       spVerdict (planBoundary req) `shouldBe` "licensed-lossless"
       spMarshal (planBoundary req) `shouldSatisfy` any ("zero-extend the nat" `T.isInfixOf`)
 
     it "refuses a signed bigint crossing into a Nat (the negative domain does not transfer)" $ do
       let req = StubRequest "haskell:GMP/Integer" "lean4:N/Nat"
-              [ Position "arg 0" (Member FBigSigned Nothing "GMP/Integer") (Member FBigUnsigned Nothing "Lean/Nat") ]
+              [ Position "arg 0" (Member FBigSigned Nothing Nothing "GMP/Integer") (Member FBigUnsigned Nothing Nothing "Lean/Nat") ]
               [] [] Nothing Nothing False
           plan = planBoundary req
       spVerdict plan `shouldBe` "unlicensed-overflow-domain"
@@ -263,26 +263,28 @@ spec = do
 
     it "refuses bigint-to-fixed-width crossings as a representation failure, not a range guess" $ do
       let req = StubRequest "lean4:N/Nat" "rust:factorial/factorial"
-              [ Position "arg 0" (Member FBigSigned Nothing "Lean/Int") (Member FSigned (Just 64) "std/i64")
-              , Position "result" (Member FSigned (Just 64) "std/i64") (Member FBigSigned Nothing "Lean/Int")
+              [ Position "arg 0" (Member FBigSigned Nothing Nothing "Lean/Int") (Member FSigned (Just 64) Nothing "std/i64")
+              , Position "result" (Member FSigned (Just 64) Nothing "std/i64") (Member FBigSigned Nothing Nothing "Lean/Int")
               ] [] [] Nothing Nothing False
           plan = planBoundary req
       -- Not unlicensed-narrowing (there is no width to compare): the
-      -- honest verdict is that the domains are different representations.
-      spVerdict plan `shouldBe` "unlicensed-representation"
-      spReasons plan `shouldSatisfy` any ("unbounded" `T.isInfixOf`)
+      -- honest verdict is that no range was declared for the big side
+      -- (C5 refined the C4 name from unlicensed-representation — the
+      -- refusal is now the missing contract, not a width guess).
+      spVerdict plan `shouldBe` "unlicensed-unbounded"
+      spReasons plan `shouldSatisfy` any ("no declared bound" `T.isInfixOf`)
 
     it "renders the FBig crossing refusal as comment-only debris" $ do
       let req = StubRequest "lean4:N/Nat" "rust:factorial/factorial"
-              [ Position "arg 0" (Member FBigSigned Nothing "Lean/Int") (Member FSigned (Just 64) "std/i64") ]
+              [ Position "arg 0" (Member FBigSigned Nothing Nothing "Lean/Int") (Member FSigned (Just 64) Nothing "std/i64") ]
               [] [] Nothing Nothing False
       renderCStubs (planBoundary req) `shouldSatisfy` all (T.isPrefixOf "//")
 
     it "refuses a same-family-but-different-domain FBig pair by domain, not family" $ do
       -- BigSigned -> BigUnsigned is refused (overflow-domain); the
       -- reverse is lossless; a family-blind rule would get both wrong.
-      let (vS, _) = license (Member FBigSigned Nothing "a") (Member FBigUnsigned Nothing "b")
-          (vU, _) = license (Member FBigUnsigned Nothing "a") (Member FBigSigned Nothing "b")
+      let (vS, _) = license (Member FBigSigned Nothing Nothing "a") (Member FBigUnsigned Nothing Nothing "b")
+          (vU, _) = license (Member FBigUnsigned Nothing Nothing "a") (Member FBigSigned Nothing Nothing "b")
       vS `shouldBe` "unlicensed-overflow-domain"
       vU `shouldBe` "licensed-lossless"
 

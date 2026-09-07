@@ -22,6 +22,7 @@ import IntelliMonad.Tools.OrganBank.Dictionary
     Member (..),
     aggregate,
     license,
+    licenseBig,
     memberOf,
   )
 
@@ -53,13 +54,13 @@ spec = do
       memberOf "c" "std" "int24" `shouldBe` Nothing
 
   describe "license" $ do
-    let m f w note = Member f w note
+    let m f w note = Member f w Nothing note
     it "licenses equal-width same-family crossings as lossless" $
       license (m FSigned (Just 32) "a") (m FSigned (Just 32) "b") `shouldBe`
         ("licensed-lossless", ["axiom: signed-int (32 bits) — a", "axiom: signed-int (32 bits) — b", "same family, no range question"])
 
     it "licenses same-family same-width regardless of the note text" $ do
-      let (v, _) = license (Member FSigned (Just 64) "x") (Member FSigned (Just 64) "y")
+      let (v, _) = license (Member FSigned (Just 64) Nothing "x") (Member FSigned (Just 64) Nothing "y")
       v `shouldBe` "licensed-lossless"
 
     it "licenses widening only upward" $ do
@@ -84,26 +85,30 @@ spec = do
       v `shouldBe` "unlicensed-family"
 
     it "refuses implementation-defined precision (no range axiom)" $ do
-      let (v, _) = license (Member FSigned Nothing "sml int") (m FSigned (Just 64) "")
+      let (v, _) = license (Member FSigned Nothing Nothing "sml int") (m FSigned (Just 64) "")
       v `shouldBe` "unlicensed-range"
 
     it "licenses bigint pairs by domain: signed->signed lossless, signed->Nat refused, Nat->signed lossless" $ do
-      let (vSS, _) = license (Member FBigSigned Nothing "a") (Member FBigSigned Nothing "b")
-          (vSU, axSU) = license (Member FBigSigned Nothing "a") (Member FBigUnsigned Nothing "b")
-          (vUS, _) = license (Member FBigUnsigned Nothing "a") (Member FBigSigned Nothing "b")
+      let (vSS, _) = license (Member FBigSigned Nothing Nothing "a") (Member FBigSigned Nothing Nothing "b")
+          (vSU, axSU) = license (Member FBigSigned Nothing Nothing "a") (Member FBigUnsigned Nothing Nothing "b")
+          (vUS, _) = license (Member FBigUnsigned Nothing Nothing "a") (Member FBigSigned Nothing Nothing "b")
       vSS `shouldBe` "licensed-lossless"
       vSU `shouldBe` "unlicensed-overflow-domain"
       any ("below zero" `T.isInfixOf`) axSU `shouldBe` True
       vUS `shouldBe` "licensed-lossless"
 
-    it "refuses bigint against fixed-width as a representation mismatch (never a width guess)" $ do
-      let (v1, ax1) = license (Member FBigSigned Nothing "arbitrary") (m FSigned (Just 64) "")
-          (v2, _) = license (m FSigned (Just 64) "") (Member FBigSigned Nothing "arbitrary")
-          (v3, _) = license (Member FBigUnsigned Nothing "arbitrary") (m FUnsigned (Just 32) "")
-      v1 `shouldBe` "unlicensed-representation"
-      any ("unbounded" `T.isInfixOf`) ax1 `shouldBe` True
-      v2 `shouldBe` "unlicensed-representation"
-      v3 `shouldBe` "unlicensed-representation"
+    it "refuses bigint against fixed-width without a declared bound; fixed->big is lossless (C5)" $ do
+      -- big->fixed with no bound: no range both sides agreed to honor.
+      let (v1, ax1) = license (Member FBigSigned Nothing Nothing "arbitrary") (m FSigned (Just 64) "")
+      v1 `shouldBe` "unlicensed-unbounded"
+      any ("unbounded" `T.isInfixOf`) ax1 || any ("no declared bound" `T.isInfixOf`) ax1 `shouldBe` True
+      -- fixed->big: every fixed value is representable in the bigint
+      -- domain (the C5 correction — C4 refused both directions with
+      -- one rule; only big->fixed has anything to verify).
+      let (v2, _) = license (m FSigned (Just 64) "") (Member FBigSigned Nothing Nothing "arbitrary")
+      v2 `shouldBe` "licensed-lossless"
+      let (v3, _) = license (Member FBigUnsigned Nothing Nothing "arbitrary") (m FUnsigned (Just 32) "")
+      v3 `shouldBe` "unlicensed-overflow-domain"
 
     it "admits dynamic sides only with runtime checks" $ do
       let (v1, _) = license (m FDynamic Nothing "") (m FSigned (Just 64) "")
@@ -132,6 +137,66 @@ spec = do
 
     it "unknown verdicts fail closed" $
       aggregate ["licensed-lossless", "something-new"] `shouldBe` Just "something-new"
+
+  describe "license (C5 bounded marshaling contract)" $ do
+    let fix w b note = Member FSigned (Just w) b note
+        -- A bounded big carries its wire carrier width too (the check
+        -- needs the value in int64_t form): GHC Integer over i64 wire.
+        big w b note = Member FBigSigned (Just w) b note
+    it "big->fixed with a declared bound is licensed-bounded" $
+      let (v, ax) = license (big 64 (Just 60) "GHC Integer") (fix 64 Nothing "rust i64")
+      in do
+        v `shouldBe` "licensed-bounded"
+        any ("bound" `T.isInfixOf`) ax `shouldBe` True
+
+    it "big->fixed without a bound stays refused: no range both sides agreed to honor" $
+      let (v, ax) = license (big 64 Nothing "unbounded") (fix 64 Nothing "rust i64")
+      in do
+        v `shouldBe` "unlicensed-unbounded"
+        any ("no declared bound" `T.isInfixOf`) ax `shouldBe` True
+
+    it "big->fixed refuses when the bound eats the sentinel headroom" $
+      let (v, _) = license (big 64 (Just 63) "koka int") (fix 64 Nothing "rust i64")
+      in v `shouldBe` "unlicensed-bound-headroom"
+
+    it "fixed->big without a bound is lossless (every fixed value fits any bigint domain)" $
+      let (v, _) = license (fix 64 Nothing "rust i64") (big 64 Nothing "koka int")
+      in v `shouldBe` "licensed-lossless"
+
+    it "fixed->big with a bound is licensed-bounded (narrowing rescue)" $
+      let (v, ax) = license (fix 64 Nothing "rust i64") (Member FSigned (Just 63) (Just 61) "ocaml int (63-bit)")
+      in do
+        v `shouldBe` "licensed-bounded"
+        any ("2^61" `T.isInfixOf`) ax `shouldBe` True
+
+    it "the demo direction: unbounded caller into a declared callee domain is a checked crossing" $
+      let (v, ax) = license (fix 64 Nothing "rust i64") (fix 64 (Just 60) "koka int")
+      in do
+        v `shouldBe` "licensed-bounded"
+        any ("sentinel" `T.isInfixOf`) ax `shouldBe` True
+
+    it "bounded narrowing rescue is symmetric-consistent: fixed->fixed with bound licenses the narrowing" $
+      let (v, ax) = license (fix 64 Nothing "rust i64") (fix 32 (Just 30) "c int32 under contract")
+      in do
+        v `shouldBe` "licensed-bounded"
+        any ("2^30" `T.isInfixOf`) ax `shouldBe` True
+
+    it "bound >= width is refused (no sentinel headroom)" $
+      let (v, _) = license (fix 64 Nothing "a") (fix 32 (Just 32) "b")
+      in v `shouldBe` "unlicensed-bound-headroom"
+
+    it "source-only declared bound rescues a narrowing by construction (no runtime check)" $
+      let (v, ax) = license (fix 64 (Just 60) "koka int") (fix 63 Nothing "ocaml int")
+      in do
+        v `shouldBe` "licensed-bounded"
+        any ("no runtime check required" `T.isInfixOf`) ax `shouldBe` True
+
+    it "doctest parity: licenseBig big60->fix64 licenses, big70->fix64 refuses" $
+      let (v1, _) = licenseBig (big 64 (Just 60) "d") (fix 64 Nothing "w")
+          (v2, _) = licenseBig (big 64 (Just 70) "d") (fix 64 Nothing "w")
+      in do
+        v1 `shouldBe` "licensed-bounded"
+        v2 `shouldBe` "unlicensed-bound-headroom"
 
   describe "boundaryReport dictionary integration (direction-aware)" $ do
     let args = OrganCheckBoundary "Factorial" "factorial" (Just "c") "factorial_rs" "factorial" (Just "rust")

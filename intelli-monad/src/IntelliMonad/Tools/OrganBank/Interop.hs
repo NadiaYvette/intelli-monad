@@ -147,6 +147,15 @@ runInterop req = case planBoundary req of
               , ioWitnessDomain = pmwaWitnessDomain
               }
           (Just rep, Just conv, Just eff)
+            | "unproven" `T.isPrefixOf` rep ->
+                InteropOutcome
+                  { ioVerdict = "pmwa-unproven-representation"
+                  , ioPair = pairOf req
+                  , ioRepresentation = Just rep
+                  , ioConvention = Just conv
+                  , ioEffects = Just eff
+                  , ioWitnessDomain = pmwaWitnessDomain
+                  }
             | "unproven" `T.isPrefixOf` eff ->
                 InteropOutcome
                   { ioVerdict = "pmwa-unproven-effects"
@@ -191,14 +200,31 @@ pairOf req =
 -- ints, IEEE floats, bool, text, unit). FBig*/FDynamic positions
 -- refuse the claim as stated: the wire renders them as @void *@
 -- handles, and a claim of exactness over boxed values would be a lie.
+--
+-- C5: a position with a /declared bound/ stays scalar (the bounded
+-- koka entry rides the int64 wire unboxed — proven live), but the
+-- witness only reaches 'pmwaWitnessDomain'; a bound beyond it means
+-- the leg's exhaustive reasoning stops and the claim rests on the
+-- generated runtime checks. That is @unproven@, never silently
+-- dropped — the same honesty the effects leg uses for a requested
+-- but ungeneratable map.
 representationWitness :: StubRequest -> Maybe Text
 representationWitness req
-  | null offenders =
+  | not (null offenders) = Nothing
+  | not (null beyond) =
+      Just
+        ( "unproven: " <> T.pack (show (length (srPositions req)))
+            <> " positions stay in the scalar wire domain, but "
+            <> T.pack (show (length beyond))
+            <> " declared bound(s) exceed the witness domain — exactness past 2^"
+            <> T.pack (show witnessBits)
+            <> " rests on the crossing's generated runtime checks (sentinel), not on this witness"
+        )
+  | otherwise =
       Just
         ( "verified: " <> T.pack (show (length (srPositions req)))
             <> " positions stay in the scalar wire domain"
         )
-  | otherwise = Nothing
   where
     offenders =
       [ m
@@ -206,6 +232,8 @@ representationWitness req
       , m <- [posFrom p, posTo p]
       , not (scalarFamily (mFamily m) (mWidth m))
       ]
+    beyond = [b | p <- srPositions req, m <- [posFrom p, posTo p], Just b <- [mBound m], b > witnessBits]
+    witnessBits = 40 -- keep in sync with pmwaWitnessDomain (2^40)
 
 -- | The families whose C ABI the wire emits exactly.
 scalarFamily :: Family -> Maybe Int -> Bool
