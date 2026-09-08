@@ -526,3 +526,17 @@ With this, C2–C5 all have live, wire-driven proofs; the remaining
 open stub note from C3 is documented in its section above. Per the
 positioning section: further demos now have diminishing returns — the
 next leverage is dictionary/axiom depth for frankenstein's lowering.
+
+## Evidence classes on the axiom table (2026-09-08)
+
+The dictionary axiom table now carries per-entry provenance
+(`Evidence`: ESpec > EPracticed > EProbed > EConventional) — the
+weighting frankenstein's lowering applies when trusting an axiom
+against its own lowering decisions. The tag rides the wire-facing
+axiom citation line (`axiomLine`), so downstream consumers parse a
+class, not prose. Koka/OCaml bounded entries and the ABI-proven
+claims are EProbed (each backed by a CI-able spike script); the
+canonical core names are EConventional (agreement, not fact); spec-
+and practice-backed widths are ESpec/EPracticed. The spike index
+table in `examples/c2-spike/README.md` maps every script to the
+evidence it earns.

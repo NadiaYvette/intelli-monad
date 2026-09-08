@@ -36,6 +36,27 @@ GHC island direct                          7! = 5040      ok
 
 Any mismatch is a nonzero exit — the script is CI-able.
 
+## Spike index: what each script proves
+
+Every milestone in this directory has a one-command live proof. The
+script itself is the source of truth on *how*; this table is the map
+on *why* — and the evidence class each proof earns for the
+dictionary's axiom table (see `IntelliMonad.Tools.OrganBank.Dictionary`,
+`Evidence`).
+
+| script | proves | dictionary evidence earned |
+|---|---|---|
+| `run.sh` | C2: wire-generated glue, filled callee trampoline, GHC+rust islands | `ghc-prim/Int#`, `std/i64` (EPracticed / ESpec, ABI exercised) |
+| `run_koka.sh` | C3: effect-row crossing over the plain int64 ABI (adapter, not shim) | `std/core/int` ABI claim (EProbed) |
+| `run_koka_generated.sh` | C4: the adapter itself becomes wire-generated | adapter ABI (EProbed) |
+| `run_refused.sh` | fail-closed: the effect-row subset rule refuses the reverse direction | refusal path (EProbed) |
+| `run_koka_mapped.sh` | C3 closed: generated effect map, sentinel mapping | `std/core/int/bounded*` + sentinel contract (EProbed) |
+| `run_multi.sh` | one process, three runtimes (C host + GHC RTS + kklib) | GHC/kklib init contracts (EProbed) |
+| `run_bounded.sh` | C5: declared-bound marshaling, corner semantics live | `std/core/int/bounded60` (EProbed) |
+| `run_ocaml.sh` | OCaml gold: bounded61 adapter + exception sentinel | `Stdlib/int/bounded61` (EProbed) |
+| `run_big.sh` | FBig: big-big gate, exact-arithmetic guards, 20! sentinel | `std/core/integer/bounded60` (EProbed) |
+| `run_quad.sh` | C2+C4+C5 at full scale: four runtimes, one process | OCaml RTS init + `-dstartup` link recipe (EProbed) |
+
 ## The rules this loop demonstrates
 
 - **Bridge symbols and island exports are separate namespaces.** The

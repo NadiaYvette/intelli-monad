@@ -17,8 +17,10 @@
 -- implementation-defined simply cannot license a fixed-width crossing.
 module IntelliMonad.Tools.OrganBank.Dictionary
   ( Family (..)
+  , Evidence (..)
   , Member (..)
   , memberOf
+  , axiomLine
   , license
   , licenseBig
   , licenseBigIn
@@ -59,10 +61,30 @@ data Family
     FDynamic
   deriving (Eq, Show)
 
+-- | How a dictionary entry's claim is known — the weighting
+-- frankenstein's lowering applies when it trusts the axiom against its
+-- own lowering decisions. Ordered from strongest to weakest.
+data Evidence
+  = -- | Pinned by a language standard / reference manual the compiler
+    -- team cannot change on a whim (Rust reference, ISO C width floors).
+    ESpec
+  | -- | Guaranteed by the implementation in active use (GHC.Prim on
+    -- supported 64-bit targets, LP64 practice, opam-documented OCaml).
+    EPracticed
+  | -- | Demonstrated by compiling and linking in this repo's gold
+    -- loops (the ABI-notes discipline: "demonstrated, not read from
+    -- docs"). Stronger than it sounds: these probes live in CI-able
+    -- scripts that fail loudly if the ABI moves.
+    EProbed
+  | -- | An agreement point rather than a fact (the @core/*@ canonical
+    -- names, @\/any@): true because both sides signed it.
+    EConventional
+  deriving (Eq, Show)
+
 -- | One dictionary entry: a family, a bit width where that question
 -- even makes sense, an optional /declared bound/ for the
--- bounded-marshaling contract (see 'license'), and the citation for
--- the claim.
+-- bounded-marshaling contract (see 'license'), how the claim is known
+-- ('Evidence'), and the citation for the claim.
 data Member = Member
   { mFamily :: Family,
     mWidth :: Maybe Int,
@@ -70,12 +92,16 @@ data Member = Member
     -- ^ Declared bound in bits (@|v| < 2^bound@, symmetric). 'Nothing'
     -- means the entry claims its family's full domain. A bound must
     -- be strictly smaller than the width when both are present.
+    mEvidence :: Evidence,
+    -- ^ How the claim is known. The consumer-facing tag rides the
+    -- axiom citation line (see 'axiomLine'); the lowering weights its
+    -- trust by this class, not by parsing prose.
     mNote :: Text
   }
   deriving (Eq, Show)
 
 dyn :: Member
-dyn = Member FDynamic Nothing Nothing "dynamic: the shim leaves representation to the runtime"
+dyn = Member FDynamic Nothing Nothing EConventional "dynamic: the shim leaves representation to the runtime"
 
 -- | The axiom table. Key: (lowercased language, rendered qname
 -- @\"module/name\"@). Sources are quoted in the notes; only facts that
@@ -91,64 +117,64 @@ table =
         -- runs on, NOT what the standard alone guarantees — plain int
         -- is only guaranteed >= 16 bits. Exact-width unsigned types are
         -- stdint.h (C17 7.20.1.1).
-        [ (("c", "std/int8"), Member FSigned (Just 8) Nothing "ISO C 5.2.4.2.1: signed char >= 8 bits; 8 is universal practice"),
-          (("c", "std/int16"), Member FSigned (Just 16) Nothing "ISO C 5.2.4.2.1: short >= 16 bits; 16 is universal practice"),
-          (("c", "std/int32"), Member FSigned (Just 32) Nothing "ISO C 5.2.4.2.1 guarantees only >= 16; 32 bits is LP64 practice on all organ-bank targets"),
-          (("c", "std/int64"), Member FSigned (Just 64) Nothing "ISO C 5.2.4.2.1 (long) + LP64 practice: 64 bits on all organ-bank targets"),
-          (("c", "std/u8"), Member FUnsigned (Just 8) Nothing "C17 7.20.1.1: uint8_t (exact-width; optional in theory, universal in practice)"),
-          (("c", "std/u16"), Member FUnsigned (Just 16) Nothing "C17 7.20.1.1: uint16_t"),
-          (("c", "std/u32"), Member FUnsigned (Just 32) Nothing "C17 7.20.1.1: uint32_t"),
-          (("c", "std/u64"), Member FUnsigned (Just 64) Nothing "C17 7.20.1.1: uint64_t"),
-          (("c", "std/f32"), Member FFloat (Just 32) Nothing "ISO C 5.2.4.2.2 (FLT_* limits): IEEE-754 binary32 on all supported targets"),
-          (("c", "std/f64"), Member FFloat (Just 64) Nothing "ISO C 5.2.4.2.2 (DBL_* limits): IEEE-754 binary64")
+        [ (("c", "std/int8"), Member FSigned (Just 8) Nothing EPracticed "ISO C 5.2.4.2.1: signed char >= 8 bits; 8 is universal practice"),
+          (("c", "std/int16"), Member FSigned (Just 16) Nothing EPracticed "ISO C 5.2.4.2.1: short >= 16 bits; 16 is universal practice"),
+          (("c", "std/int32"), Member FSigned (Just 32) Nothing EPracticed "ISO C 5.2.4.2.1 guarantees only >= 16; 32 bits is LP64 practice on all organ-bank targets"),
+          (("c", "std/int64"), Member FSigned (Just 64) Nothing EPracticed "ISO C 5.2.4.2.1 (long) + LP64 practice: 64 bits on all organ-bank targets"),
+          (("c", "std/u8"), Member FUnsigned (Just 8) Nothing EPracticed "C17 7.20.1.1: uint8_t (exact-width; optional in theory, universal in practice)"),
+          (("c", "std/u16"), Member FUnsigned (Just 16) Nothing EPracticed "C17 7.20.1.1: uint16_t"),
+          (("c", "std/u32"), Member FUnsigned (Just 32) Nothing EPracticed "C17 7.20.1.1: uint32_t"),
+          (("c", "std/u64"), Member FUnsigned (Just 64) Nothing EPracticed "C17 7.20.1.1: uint64_t"),
+          (("c", "std/f32"), Member FFloat (Just 32) Nothing EPracticed "ISO C 5.2.4.2.2 (FLT_* limits): IEEE-754 binary32 on all supported targets"),
+          (("c", "std/f64"), Member FFloat (Just 64) Nothing EPracticed "ISO C 5.2.4.2.2 (DBL_* limits): IEEE-754 binary64")
         ],
         -- Haskell: the GHC.Prim docs state that Haskell 98 requires at
         -- least 30 bits for Int and that Int# is a machine integer; on
         -- every currently supported 64-bit target that word is 64 bits.
-        [ (("haskell", "ghc-prim/Int#"), Member FSigned (Just 64) Nothing "GHC.Prim docs: Haskell98 requires >= 30 bits; Int# is a machine integer — 64 bits on all supported 64-bit targets"),
-          (("haskell", "ghc-prim/Word#"), Member FUnsigned (Just 64) Nothing "GHC.Prim docs: Word# is a machine word — 64 bits on all supported 64-bit targets")
+        [ (("haskell", "ghc-prim/Int#"), Member FSigned (Just 64) Nothing EPracticed "GHC.Prim docs: Haskell98 requires >= 30 bits; Int# is a machine integer — 64 bits on all supported 64-bit targets"),
+          (("haskell", "ghc-prim/Word#"), Member FUnsigned (Just 64) Nothing EPracticed "GHC.Prim docs: Word# is a machine word — 64 bits on all supported 64-bit targets")
         ],
         -- Rust: fixed by the language reference.
-        [ (("rust", "std/i8"), Member FSigned (Just 8) Nothing "Rust reference (type.numeric): i8"),
-          (("rust", "std/i16"), Member FSigned (Just 16) Nothing "Rust reference (type.numeric): i16"),
-          (("rust", "std/i32"), Member FSigned (Just 32) Nothing "Rust reference (type.numeric): i32"),
-          (("rust", "std/i64"), Member FSigned (Just 64) Nothing "Rust reference (type.numeric): i64"),
-          (("rust", "std/i128"), Member FSigned (Just 128) Nothing "Rust reference (type.numeric): i128"),
-          (("rust", "std/u8"), Member FUnsigned (Just 8) Nothing "Rust reference (type.numeric): u8"),
-          (("rust", "std/u16"), Member FUnsigned (Just 16) Nothing "Rust reference (type.numeric): u16"),
-          (("rust", "std/u32"), Member FUnsigned (Just 32) Nothing "Rust reference (type.numeric): u32"),
-          (("rust", "std/u64"), Member FUnsigned (Just 64) Nothing "Rust reference (type.numeric): u64"),
-          (("rust", "std/u128"), Member FUnsigned (Just 128) Nothing "Rust reference (type.numeric): u128"),
-          (("rust", "std/f32"), Member FFloat (Just 32) Nothing "Rust reference (type.numeric): f32 is IEEE 754-2008 binary32"),
-          (("rust", "std/f64"), Member FFloat (Just 64) Nothing "Rust reference (type.numeric): f64 is IEEE 754-2008 binary64")
+        [ (("rust", "std/i8"), Member FSigned (Just 8) Nothing ESpec "Rust reference (type.numeric): i8"),
+          (("rust", "std/i16"), Member FSigned (Just 16) Nothing ESpec "Rust reference (type.numeric): i16"),
+          (("rust", "std/i32"), Member FSigned (Just 32) Nothing ESpec "Rust reference (type.numeric): i32"),
+          (("rust", "std/i64"), Member FSigned (Just 64) Nothing ESpec "Rust reference (type.numeric): i64"),
+          (("rust", "std/i128"), Member FSigned (Just 128) Nothing ESpec "Rust reference (type.numeric): i128"),
+          (("rust", "std/u8"), Member FUnsigned (Just 8) Nothing ESpec "Rust reference (type.numeric): u8"),
+          (("rust", "std/u16"), Member FUnsigned (Just 16) Nothing ESpec "Rust reference (type.numeric): u16"),
+          (("rust", "std/u32"), Member FUnsigned (Just 32) Nothing ESpec "Rust reference (type.numeric): u32"),
+          (("rust", "std/u64"), Member FUnsigned (Just 64) Nothing ESpec "Rust reference (type.numeric): u64"),
+          (("rust", "std/u128"), Member FUnsigned (Just 128) Nothing ESpec "Rust reference (type.numeric): u128"),
+          (("rust", "std/f32"), Member FFloat (Just 32) Nothing ESpec "Rust reference (type.numeric): f32 is IEEE 754-2008 binary32"),
+          (("rust", "std/f64"), Member FFloat (Just 64) Nothing ESpec "Rust reference (type.numeric): f64 is IEEE 754-2008 binary64")
         ],
         -- Zig: fixed by the language reference.
-        [ (("zig", "std/i64"), Member FSigned (Just 64) Nothing "Zig language reference: i64"),
-          (("zig", "std/u64"), Member FUnsigned (Just 64) Nothing "Zig language reference: u64"),
-          (("zig", "std/f64"), Member FFloat (Just 64) Nothing "Zig language reference: f64 IEEE-754 double")
+        [ (("zig", "std/i64"), Member FSigned (Just 64) Nothing ESpec "Zig language reference: i64"),
+          (("zig", "std/u64"), Member FUnsigned (Just 64) Nothing ESpec "Zig language reference: u64"),
+          (("zig", "std/f64"), Member FFloat (Just 64) Nothing ESpec "Zig language reference: f64 IEEE-754 double")
         ],
         -- OCaml: the manual (§2.1 Base values) documents the tagged int;
         -- one bit is the pointer tag, 63 usable on 64-bit runtimes.
-        [ (("ocaml", "Stdlib/int"), Member FSigned (Just 63) Nothing "OCaml manual §2.1 (values): int holds -2^62..2^62-1 on 64-bit runtimes (63-bit tagged)"),
-          (("ocaml", "Stdlib/int/bounded61"), Member FSigned (Just 63) (Just 61) "OCaml Stdlib/int with declared bound |v| < 2^61: leaves sentinel headroom inside the 63-bit tagged representation — the generated adapter checks it at the crossing (C5 bounded-marshaling license; a plain i64 caller into unbounded Stdlib/int is refused as a narrowing)"),
-          (("ocaml", "Stdlib/float"), Member FFloat (Just 64) Nothing "OCaml manual §2.1 (values): IEEE 754 double, 53-bit mantissa")
+        [ (("ocaml", "Stdlib/int"), Member FSigned (Just 63) Nothing ESpec "OCaml manual §2.1 (values): int holds -2^62..2^62-1 on 64-bit runtimes (63-bit tagged)"),
+          (("ocaml", "Stdlib/int/bounded61"), Member FSigned (Just 63) (Just 61) EProbed "OCaml Stdlib/int with declared bound |v| < 2^61: leaves sentinel headroom inside the 63-bit tagged representation — the generated adapter checks it at the crossing (C5 bounded-marshaling license; a plain i64 caller into unbounded Stdlib/int is refused as a narrowing)"),
+          (("ocaml", "Stdlib/float"), Member FFloat (Just 64) Nothing ESpec "OCaml manual §2.1 (values): IEEE 754 double, 53-bit mantissa")
         ],
         -- F#: int = Int32 by the F# spec.
-        [ (("fsharp", "FSharp.Core/int"), Member FSigned (Just 32) Nothing "F# spec: int is Int32"),
-          (("fsharp", "FSharp.Core/float"), Member FFloat (Just 64) Nothing "F# spec: float is IEEE-754 double")
+        [ (("fsharp", "FSharp.Core/int"), Member FSigned (Just 32) Nothing ESpec "F# spec: int is Int32"),
+          (("fsharp", "FSharp.Core/float"), Member FFloat (Just 64) Nothing ESpec "F# spec: float is IEEE-754 double")
         ],
         -- Julia: Int64/Float64 fixed by the standard library.
-        [ (("julia", "Core/Int64"), Member FSigned (Just 64) Nothing "Julia docs: Int64"),
-          (("julia", "Core/Int32"), Member FSigned (Just 32) Nothing "Julia docs: Int32"),
-          (("julia", "Core/Float64"), Member FFloat (Just 64) Nothing "Julia docs: Float64 IEEE-754 double")
+        [ (("julia", "Core/Int64"), Member FSigned (Just 64) Nothing ESpec "Julia docs: Int64"),
+          (("julia", "Core/Int32"), Member FSigned (Just 32) Nothing ESpec "Julia docs: Int32"),
+          (("julia", "Core/Float64"), Member FFloat (Just 64) Nothing ESpec "Julia docs: Float64 IEEE-754 double")
         ],
         -- Swift: Int is word-sized; every supported target is 64-bit.
-        [ (("swift", "Swift/Int"), Member FSigned (Just 64) Nothing "Swift: Int is word-sized, 64 bits on all supported targets"),
-          (("swift", "Swift/Double"), Member FFloat (Just 64) Nothing "Swift: Double is IEEE-754 double")
+        [ (("swift", "Swift/Int"), Member FSigned (Just 64) Nothing EPracticed "Swift: Int is word-sized, 64 bits on all supported targets"),
+          (("swift", "Swift/Double"), Member FFloat (Just 64) Nothing ESpec "Swift: Double is IEEE-754 double")
         ],
         -- PureScript: Int is 32-bit by the FFI contract; Number is a double.
-        [ (("purescript", "Prim/Int"), Member FSigned (Just 32) Nothing "PureScript docs: Int is a 32-bit integer"),
-          (("purescript", "Prim/Number"), Member FFloat (Just 64) Nothing "PureScript docs: Number is IEEE-754 double")
+        [ (("purescript", "Prim/Int"), Member FSigned (Just 32) Nothing ESpec "PureScript docs: Int is a 32-bit integer"),
+          (("purescript", "Prim/Number"), Member FFloat (Just 64) Nothing ESpec "PureScript docs: Number is IEEE-754 double")
         ],
         -- Koka: `int` is arbitrary precision — unboxed smallints carry a
         -- 63-bit payload (kklib.h: KK_TAG_BITS = 1 over a 64-bit kk_intf_t)
@@ -160,37 +186,37 @@ table =
         -- (std/core/integer): values beyond int64 are real for koka, and a
         -- crossing claiming them is refused (unlicensed-representation)
         -- rather than under-modeled.
-        [ (("koka", "std/core/int"), Member FSigned (Just 64) Nothing "Koka kklib.h: int is arbitrary precision; unboxed smallint payload is 63 bits (KK_TAG_BITS=1), full int64 range representable via heap bigints — ABI models the i64 range"),
-          (("koka", "std/core/int/bounded60"), Member FSigned (Just 64) (Just 60) "Koka std/core/int carried over the wire's unboxed int64 ABI with a DECLARED BOUND |v| < 2^60: both sides honor the range, the generated glue checks it and raises the wire's status sentinel on violation (C5 bounded-marshaling license)"),
-          (("koka", "std/core/int/bounded61"), Member FSigned (Just 63) (Just 61) "Koka std/core/int with declared bound |v| < 2^61: fits the unboxed smallint payload (KK_TAG_BITS=1) exactly — the checked contract needs no heap bigint on either side"),
-          (("koka", "std/core/integer"), Member FBigSigned Nothing Nothing "Koka kklib.h: int is arbitrary precision (63-bit smallint payload + heap bigints) — the full unbounded domain, distinct from the ABI-modeled i64 range"),
-          (("koka", "std/core/integer/bounded60"), Member FBigSigned Nothing (Just 60) "Koka std/core/integer under a declared bound |v| < 2^60: the unbounded big-int domain narrowed by a both-sides contract — the shim checks it in koka's exact big-int arithmetic and violations ride the handle/try sentinel (C5 FBig license; the unbounded big crossing it replaces is not silently lossless)"),
-          (("koka", "std/core/float64"), Member FFloat (Just 64) Nothing "Koka docs: float64 IEEE-754 double")
+        [ (("koka", "std/core/int"), Member FSigned (Just 64) Nothing EProbed "Koka kklib.h: int is arbitrary precision; unboxed smallint payload is 63 bits (KK_TAG_BITS=1), full int64 range representable via heap bigints — ABI models the i64 range"),
+          (("koka", "std/core/int/bounded60"), Member FSigned (Just 64) (Just 60) EProbed "Koka std/core/int carried over the wire's unboxed int64 ABI with a DECLARED BOUND |v| < 2^60: both sides honor the range, the generated glue checks it and raises the wire's status sentinel on violation (C5 bounded-marshaling license)"),
+          (("koka", "std/core/int/bounded61"), Member FSigned (Just 63) (Just 61) EProbed "Koka std/core/int with declared bound |v| < 2^61: fits the unboxed smallint payload (KK_TAG_BITS=1) exactly — the checked contract needs no heap bigint on either side"),
+          (("koka", "std/core/integer"), Member FBigSigned Nothing Nothing EProbed "Koka kklib.h: int is arbitrary precision (63-bit smallint payload + heap bigints) — the full unbounded domain, distinct from the ABI-modeled i64 range"),
+          (("koka", "std/core/integer/bounded60"), Member FBigSigned Nothing (Just 60) EProbed "Koka std/core/integer under a declared bound |v| < 2^60: the unbounded big-int domain narrowed by a both-sides contract — the shim checks it in koka's exact big-int arithmetic and violations ride the handle/try sentinel (C5 FBig license; the unbounded big crossing it replaces is not silently lossless)"),
+          (("koka", "std/core/float64"), Member FFloat (Just 64) Nothing ESpec "Koka docs: float64 IEEE-754 double")
         ],
         -- Fortran: gfortran default INTEGER is kind=4 (32 bits); the
         -- standard only guarantees the default kind exists.
-        [ (("fortran", "std/integer"), Member FSigned (Just 32) Nothing "GNU Fortran: default INTEGER kind=4 (32 bits)"),
-          (("fortran", "std/real"), Member FFloat (Just 32) Nothing "GNU Fortran: default REAL kind=4 (IEEE single)")
+        [ (("fortran", "std/integer"), Member FSigned (Just 32) Nothing EPracticed "GNU Fortran: default INTEGER kind=4 (32 bits)"),
+          (("fortran", "std/real"), Member FFloat (Just 32) Nothing EPracticed "GNU Fortran: default REAL kind=4 (IEEE single)")
         ],
         -- Implementation-defined widths: honestly 'Nothing'.
-        [ (("sml", "Basis/int"), Member FSigned Nothing Nothing "SML Basis: Int precision is implementation-defined (SML/NJ 31, MLton 63)"),
-          (("mercury", "std/int"), Member FSigned Nothing Nothing "Mercury library: int is implementation-defined (>= 31 bits)")
+        [ (("sml", "Basis/int"), Member FSigned Nothing Nothing ESpec "SML Basis: Int precision is implementation-defined (SML/NJ 31, MLton 63)"),
+          (("mercury", "std/int"), Member FSigned Nothing Nothing ESpec "Mercury library: int is implementation-defined (>= 31 bits)")
         ],
         -- C++: ISO C++ guarantees long >= 32 bits; every LP64 target
         -- organ-bank runs on makes it 64. The corpus cpp example emits
         -- std/long for factorial's argument and result.
-        [ (("cpp", "std/long"), Member FSigned (Just 64) Nothing "ISO C++: long is 64 bits on LP64 targets")
+        [ (("cpp", "std/long"), Member FSigned (Just 64) Nothing EPracticed "ISO C++: long is 64 bits on LP64 targets")
         ],
         -- Ada: the corpus ada example emits Standard/Integer; GNAT
         -- defines it as 32 bits (RM B.1).
-        [ (("ada", "Standard/Integer"), Member FSigned (Just 32) Nothing "GNAT: Integer is 32 bits (Ada RM B.1)")
+        [ (("ada", "Standard/Integer"), Member FSigned (Just 32) Nothing EPracticed "GNAT: Integer is 32 bits (Ada RM B.1)")
         ],
         -- Arbitrary precision. Lean/Agda Nat are genuinely unsigned:
         -- the FBigUnsigned family lets the axiom table refuse a signed
         -- bigint source (negatives do not transfer) as overflow-domain
         -- rather than pretending the families are equivalent.
-        [ (("lean4", "Lean/Nat"), Member FBigUnsigned Nothing Nothing "Lean 4: Nat is arbitrary precision and non-negative"),
-          (("agda", "Agda.Builtin.Nat/Nat"), Member FBigUnsigned Nothing Nothing "Agda: Nat is arbitrary precision and non-negative")
+        [ (("lean4", "Lean/Nat"), Member FBigUnsigned Nothing Nothing ESpec "Lean 4: Nat is arbitrary precision and non-negative"),
+          (("agda", "Agda.Builtin.Nat/Nat"), Member FBigUnsigned Nothing Nothing ESpec "Agda: Nat is arbitrary precision and non-negative")
         ],
         -- Canonical core: the shared primitives. Attributed to the
         -- organ-ir shim convention rather than any language standard —
@@ -198,9 +224,9 @@ table =
         -- crossings can be licensed without each shim inventing its
         -- own module. A shim that names, say, "std/bool" instead still
         -- needs its own entry; the core names are the agreement point.
-        [ (("core", "core/bool"), Member FBool Nothing Nothing "organ-ir shim convention: canonical boolean"),
-          (("core", "core/unit"), Member FUnit Nothing Nothing "organ-ir shim convention: canonical unit"),
-          (("core", "core/text"), Member FText Nothing Nothing "organ-ir shim convention: canonical text")
+        [ (("core", "core/bool"), Member FBool Nothing Nothing EConventional "organ-ir shim convention: canonical boolean"),
+          (("core", "core/unit"), Member FUnit Nothing Nothing EConventional "organ-ir shim convention: canonical unit"),
+          (("core", "core/text"), Member FText Nothing Nothing EConventional "organ-ir shim convention: canonical text")
         ]
       ]
 
@@ -240,8 +266,8 @@ memberOf lang mdl nm
 -- The verdict names are stable API — stub generation keys on them —
 -- so the examples pin them exactly. Widths interact with signedness:
 --
--- >>> let m f w n = Member f w Nothing n
--- >>> let mb f w b n = Member f w (Just b) n
+-- >>> let m f w n = Member f w Nothing ESpec n
+-- >>> let mb f w b n = Member f w (Just b) ESpec n
 -- >>> fst (license (m FSigned (Just 32) "") (m FSigned (Just 32) ""))
 -- "licensed-lossless"
 -- >>> fst (license (m FSigned (Just 32) "") (m FSigned (Just 64) ""))
@@ -268,8 +294,8 @@ memberOf lang mdl nm
 -- the wire's int64 ABI is the carrier (bound 60 fits with sentinel
 -- headroom) and the shim checks the bound in exact big-int arithmetic.
 --
--- >>> let bigU = Member FBigSigned Nothing Nothing "koka std/core/integer"
--- >>> let bigB = Member FBigSigned Nothing (Just 60) "koka std/core/integer/bounded60"
+-- >>> let bigU = Member FBigSigned Nothing Nothing EProbed "koka std/core/integer"
+-- >>> let bigB = Member FBigSigned Nothing (Just 60) EProbed "koka std/core/integer/bounded60"
 -- >>> fst (license bigU bigB)
 -- "licensed-bounded"
 --
@@ -425,17 +451,17 @@ license a b = boundGate baseCase
 -- inside the callee's width with the sentinel value still outside the
 -- declared domain. Violations fail closed with a named reason:
 --
--- >>> let big b = Member FBigSigned (Just 64) (Just b) "GHC Integer"
--- >>> let fix w = Member FSigned (Just w) Nothing "std/i64"
+-- >>> let big b = Member FBigSigned (Just 64) (Just b) EPracticed "GHC Integer"
+-- >>> let fix w = Member FSigned (Just w) Nothing ESpec "std/i64"
 -- >>> fst (licenseBig (big 60) (fix 64))
 -- "licensed-bounded"
--- >>> fst (licenseBig (Member FBigSigned Nothing Nothing "unbounded") (fix 64))
+-- >>> fst (licenseBig (Member FBigSigned Nothing Nothing EProbed "unbounded") (fix 64))
 -- "unlicensed-unbounded"
 -- >>> fst (licenseBig (big 63) (fix 64))
 -- "unlicensed-bound-headroom"
 -- >>> fst (licenseBig (big 70) (fix 64))
 -- "unlicensed-bound-headroom"
--- >>> fst (licenseBig (Member FBigUnsigned Nothing (Just 60) "Lean Nat") (fix 64))
+-- >>> fst (licenseBig (Member FBigUnsigned Nothing (Just 60) ESpec "Lean Nat") (fix 64))
 -- "unlicensed-overflow-domain"
 licenseBig :: Member -> Member -> (Text, [Text])
 licenseBig big fixed = case (mFamily big, mBound big, mWidth big, mWidth fixed) of
@@ -506,8 +532,10 @@ axiomLine :: Member -> Text
 axiomLine m =
   "axiom: " <> familyName (mFamily m) <> maybe "" (T.pack . (" (" ++) . (++ " bits)") . show) (mWidth m)
     <> maybe "" (T.pack . (" [|v| < 2^" ++) . (++ "]") . show) (mBound m)
+    <> evidenceTag (mEvidence m)
     <> if T.null (mNote m) then "" else " — " <> mNote m
   where
+    evidenceTag e = T.pack (" [" ++ show e ++ "]")
     familyName f = case f of
       FBool -> "bool"
       FText -> "text"

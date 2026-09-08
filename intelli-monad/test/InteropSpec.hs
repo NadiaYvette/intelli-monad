@@ -12,6 +12,7 @@ import Test.Hspec
 import IntelliMonad.Tools.OrganBank.Dictionary
   ( Family (..)
   , Member (..)
+  , Evidence (..)
   )
 import IntelliMonad.Tools.OrganBank.Interop
   ( InteropOutcome (..)
@@ -26,7 +27,7 @@ import IntelliMonad.Tools.OrganBank.Stubs
   )
 
 m :: Family -> Maybe Int -> Text -> Member
-m f w note = Member f w Nothing note
+m f w note = Member f w Nothing ESpec note
 
 spec :: Spec
 spec = specMain >> specC5
@@ -57,7 +58,7 @@ specMain = do
       let req =
             fixtureHaskellRust
               { srPositions =
-                  [ Position "arg 0" (Member FBigSigned (Just 64) (Just 60) "GHC Integer") (m FSigned (Just 64) "std/i64"),
+                  [ Position "arg 0" (Member FBigSigned (Just 64) (Just 60) ESpec "GHC Integer") (m FSigned (Just 64) "std/i64"),
                     Position "result" (m FSigned (Just 64) "std/i64") (m FSigned (Just 64) "ghc-prim/Int#")
                   ]
               }
@@ -109,8 +110,8 @@ specC5 = describe "runInterop: C5 bounded positions" $ do
     let req =
           fixtureHaskellRust
             { srPositions =
-                [ Position "arg 0" (m FSigned (Just 64) "std/i64") (Member FSigned (Just 64) (Just 30) "koka int under contract"),
-                  Position "result" (Member FSigned (Just 64) (Just 30) "koka int under contract") (m FSigned (Just 64) "std/i64")
+                [ Position "arg 0" (m FSigned (Just 64) "std/i64") (Member FSigned (Just 64) (Just 30) ESpec "koka int under contract"),
+                  Position "result" (Member FSigned (Just 64) (Just 30) ESpec "koka int under contract") (m FSigned (Just 64) "std/i64")
                 ]
             }
         o = runInterop req
@@ -120,8 +121,8 @@ specC5 = describe "runInterop: C5 bounded positions" $ do
     let req =
           fixtureHaskellRust
             { srPositions =
-                [ Position "arg 0" (m FSigned (Just 64) "std/i64") (Member FSigned (Just 64) (Just 60) "koka int under contract"),
-                  Position "result" (Member FSigned (Just 64) (Just 60) "koka int under contract") (m FSigned (Just 64) "std/i64")
+                [ Position "arg 0" (m FSigned (Just 64) "std/i64") (Member FSigned (Just 64) (Just 60) ESpec "koka int under contract"),
+                  Position "result" (Member FSigned (Just 64) (Just 60) ESpec "koka int under contract") (m FSigned (Just 64) "std/i64")
                 ]
             }
         o = runInterop req

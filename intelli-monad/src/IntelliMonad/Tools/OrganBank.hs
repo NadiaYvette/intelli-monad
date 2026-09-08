@@ -956,7 +956,7 @@ instance Tool OrganPlanStub where
             let memberFor l t =
                   let r = tyHeadName t
                       (m, n) = T.breakOnEnd "/" r
-                   in fromMaybe (D.Member D.FDynamic Nothing Nothing ("unresolved qname: " <> r)) (if T.null r || T.null m then Nothing else D.memberOf l (T.dropEnd 1 m) n)
+                   in fromMaybe (D.Member D.FDynamic Nothing Nothing D.EConventional ("unresolved qname: " <> r)) (if T.null r || T.null m then Nothing else D.memberOf l (T.dropEnd 1 m) n)
                 positions =
                   [ S.Position ("arg " <> T.pack (show i)) (memberFor la x) (memberFor lb y)
                   | (i, (x, y)) <- zip [1 :: Int ..] (zip (argsOf fa) (argsOf fb))

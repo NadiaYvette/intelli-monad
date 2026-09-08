@@ -11,7 +11,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Test.Hspec
 
-import IntelliMonad.Tools.OrganBank.Dictionary (Family (..), Member (..), license)
+import IntelliMonad.Tools.OrganBank.Dictionary (Evidence (..), Family (..), Member (..), license)
 import IntelliMonad.Tools.OrganBank.Stubs
 
 spec :: Spec
@@ -25,8 +25,8 @@ spec = do
 
     it "refuses a narrowing crossing with the cited axioms" $ do
       let req = StubRequest "haskell:Factorial/factorial" "c:factorial/factorial"
-              [ Position "arg 0" (Member FSigned (Just 64) Nothing "ghc-prim/Int#") (Member FSigned (Just 32) Nothing "std/int32")
-              , Position "result" (Member FSigned (Just 32) Nothing "std/int32") (Member FSigned (Just 64) Nothing "ghc-prim/Int#")
+              [ Position "arg 0" (Member FSigned (Just 64) Nothing ESpec "ghc-prim/Int#") (Member FSigned (Just 32) Nothing ESpec "std/int32")
+              , Position "result" (Member FSigned (Just 32) Nothing ESpec "std/int32") (Member FSigned (Just 64) Nothing ESpec "ghc-prim/Int#")
               ] [] [] Nothing Nothing False
           plan = planBoundary req
       spVerdict plan `shouldBe` "unlicensed-narrowing"
@@ -42,8 +42,8 @@ spec = do
 
     it "plans a dynamic crossing as runtime-checks" $ do
       let req = StubRequest "prolog:factorial/factorial" "haskell:Factorial/factorial"
-              [ Position "arg 0" (Member FDynamic Nothing Nothing "any") (Member FSigned (Just 64) Nothing "ghc-prim/Int#")
-              , Position "result" (Member FSigned (Just 64) Nothing "ghc-prim/Int#") (Member FDynamic Nothing Nothing "any")
+              [ Position "arg 0" (Member FDynamic Nothing Nothing ESpec "any") (Member FSigned (Just 64) Nothing ESpec "ghc-prim/Int#")
+              , Position "result" (Member FSigned (Just 64) Nothing ESpec "ghc-prim/Int#") (Member FDynamic Nothing Nothing ESpec "any")
               ] [] [] Nothing Nothing False
       spVerdict (planBoundary req) `shouldBe` "licensed-with-runtime-checks"
 
@@ -96,7 +96,7 @@ spec = do
 
     it "renders refusals as comment-only debris" $ do
       let req = StubRequest "haskell:x" "c:y"
-              [ Position "arg 0" (Member FSigned (Just 64) Nothing "ghc-prim/Int#") (Member FSigned (Just 32) Nothing "std/int32") ] [] [] Nothing Nothing False
+              [ Position "arg 0" (Member FSigned (Just 64) Nothing ESpec "ghc-prim/Int#") (Member FSigned (Just 32) Nothing ESpec "std/int32") ] [] [] Nothing Nothing False
           ls = renderCStubs (planBoundary req)
       ls `shouldSatisfy` all (T.isPrefixOf "//")
       ls `shouldSatisfy` any (T.isInfixOf "STUB REFUSED")
@@ -239,23 +239,23 @@ spec = do
       -- values on both sides (FBigUnsigned both ways). The result of a
       -- SIGNED callee into a Nat caller would be overflow-domain.
       let req = StubRequest "lean4:N/Nat" "haskell:GMP/Natural"
-              [ Position "arg 0" (Member FBigUnsigned Nothing Nothing "Lean/Nat") (Member FBigUnsigned Nothing Nothing "GMP/Natural")
-              , Position "result" (Member FBigUnsigned Nothing Nothing "GMP/Natural") (Member FBigUnsigned Nothing Nothing "Lean/Nat")
+              [ Position "arg 0" (Member FBigUnsigned Nothing Nothing ESpec "Lean/Nat") (Member FBigUnsigned Nothing Nothing ESpec "GMP/Natural")
+              , Position "result" (Member FBigUnsigned Nothing Nothing ESpec "GMP/Natural") (Member FBigUnsigned Nothing Nothing ESpec "Lean/Nat")
               ] [] [] Nothing Nothing False
       spVerdict (planBoundary req) `shouldBe` "licensed-lossless"
       spMarshal (planBoundary req) `shouldSatisfy` any ("box swap" `T.isInfixOf`)
 
     it "licenses Nat into signed bigint on the argument (zero-extend note)" $ do
       let req = StubRequest "lean4:N/Nat" "haskell:GMP/Integer"
-              [ Position "arg 0" (Member FBigUnsigned Nothing Nothing "Lean/Nat") (Member FBigSigned Nothing Nothing "GMP/Integer")
-              , Position "result" (Member FBigSigned Nothing Nothing "GMP/Integer") (Member FBigSigned Nothing Nothing "GMP/Integer")
+              [ Position "arg 0" (Member FBigUnsigned Nothing Nothing ESpec "Lean/Nat") (Member FBigSigned Nothing Nothing ESpec "GMP/Integer")
+              , Position "result" (Member FBigSigned Nothing Nothing ESpec "GMP/Integer") (Member FBigSigned Nothing Nothing ESpec "GMP/Integer")
               ] [] [] Nothing Nothing False
       spVerdict (planBoundary req) `shouldBe` "licensed-lossless"
       spMarshal (planBoundary req) `shouldSatisfy` any ("zero-extend the nat" `T.isInfixOf`)
 
     it "refuses a signed bigint crossing into a Nat (the negative domain does not transfer)" $ do
       let req = StubRequest "haskell:GMP/Integer" "lean4:N/Nat"
-              [ Position "arg 0" (Member FBigSigned Nothing Nothing "GMP/Integer") (Member FBigUnsigned Nothing Nothing "Lean/Nat") ]
+              [ Position "arg 0" (Member FBigSigned Nothing Nothing ESpec "GMP/Integer") (Member FBigUnsigned Nothing Nothing ESpec "Lean/Nat") ]
               [] [] Nothing Nothing False
           plan = planBoundary req
       spVerdict plan `shouldBe` "unlicensed-overflow-domain"
@@ -263,8 +263,8 @@ spec = do
 
     it "refuses bigint-to-fixed-width crossings as a representation failure, not a range guess" $ do
       let req = StubRequest "lean4:N/Nat" "rust:factorial/factorial"
-              [ Position "arg 0" (Member FBigSigned Nothing Nothing "Lean/Int") (Member FSigned (Just 64) Nothing "std/i64")
-              , Position "result" (Member FSigned (Just 64) Nothing "std/i64") (Member FBigSigned Nothing Nothing "Lean/Int")
+              [ Position "arg 0" (Member FBigSigned Nothing Nothing ESpec "Lean/Int") (Member FSigned (Just 64) Nothing ESpec "std/i64")
+              , Position "result" (Member FSigned (Just 64) Nothing ESpec "std/i64") (Member FBigSigned Nothing Nothing ESpec "Lean/Int")
               ] [] [] Nothing Nothing False
           plan = planBoundary req
       -- Not unlicensed-narrowing (there is no width to compare): the
@@ -276,15 +276,15 @@ spec = do
 
     it "renders the FBig crossing refusal as comment-only debris" $ do
       let req = StubRequest "lean4:N/Nat" "rust:factorial/factorial"
-              [ Position "arg 0" (Member FBigSigned Nothing Nothing "Lean/Int") (Member FSigned (Just 64) Nothing "std/i64") ]
+              [ Position "arg 0" (Member FBigSigned Nothing Nothing ESpec "Lean/Int") (Member FSigned (Just 64) Nothing ESpec "std/i64") ]
               [] [] Nothing Nothing False
       renderCStubs (planBoundary req) `shouldSatisfy` all (T.isPrefixOf "//")
 
     it "refuses a same-family-but-different-domain FBig pair by domain, not family" $ do
       -- BigSigned -> BigUnsigned is refused (overflow-domain); the
       -- reverse is lossless; a family-blind rule would get both wrong.
-      let (vS, _) = license (Member FBigSigned Nothing Nothing "a") (Member FBigUnsigned Nothing Nothing "b")
-          (vU, _) = license (Member FBigUnsigned Nothing Nothing "a") (Member FBigSigned Nothing Nothing "b")
+      let (vS, _) = license (Member FBigSigned Nothing Nothing ESpec "a") (Member FBigUnsigned Nothing Nothing ESpec "b")
+          (vU, _) = license (Member FBigUnsigned Nothing Nothing ESpec "a") (Member FBigSigned Nothing Nothing ESpec "b")
       vS `shouldBe` "unlicensed-overflow-domain"
       vU `shouldBe` "licensed-lossless"
 
@@ -347,7 +347,7 @@ spec = do
     -- the emitted text are the contract — a regression to `x < -2^b`
     -- (the off-by-one that let exactly -2^b through) must fail here.
     it "emits the koka bcheck with >= / <= on both corners" $ do
-      let big b = Member FBigSigned Nothing (Just b) "koka std/core/integer/bounded"
+      let big b = Member FBigSigned Nothing (Just b) EProbed "koka std/core/integer/bounded"
           req = StubRequest
             "koka:factorial_big/big-factorial"
             "koka:factorial_big_bounded/big-bounded-factorial"
@@ -364,8 +364,8 @@ spec = do
       let req = StubRequest
             "rust:factorial_rs/factorial"
             "ocaml:factorial_oc/island-factorial"
-            [ Position "arg 0" (Member FSigned (Just 64) Nothing "std/i64") (Member FSigned (Just 63) (Just 61) "Stdlib/int/bounded61")
-            , Position "result" (Member FSigned (Just 63) (Just 61) "Stdlib/int/bounded61") (Member FSigned (Just 64) Nothing "std/i64")
+            [ Position "arg 0" (Member FSigned (Just 64) Nothing ESpec "std/i64") (Member FSigned (Just 63) (Just 61) ESpec "Stdlib/int/bounded61")
+            , Position "result" (Member FSigned (Just 63) (Just 61) ESpec "Stdlib/int/bounded61") (Member FSigned (Just 64) Nothing ESpec "std/i64")
             ]
             [] [] (Just "ocaml_island_factorial") (Just "ocaml_island_factorial") False
           adapter = T.unpack (T.unlines (fromMaybe [] (spAdapter (planBoundary req))))
@@ -381,7 +381,7 @@ spec = do
     -- void *, and the trampoline extern linked against the adapter's
     -- int64_t entry by x86-64 ABI luck, not contract).
     it "types the bounded-big trampoline extern as the wire int64_t, not void *" $ do
-      let big b = Member FBigSigned Nothing (Just b) "koka std/core/integer/bounded"
+      let big b = Member FBigSigned Nothing (Just b) EProbed "koka std/core/integer/bounded"
           req = StubRequest
             "koka:factorial_big/big-factorial"
             "koka:factorial_big_bounded/big-bounded-factorial"
@@ -397,7 +397,7 @@ spec = do
     it "types bounded-big caller-side wrapper members as the wire int64_t too" $ do
       -- Mirror direction: a bounded-big caller has no C type for its
       -- own member, but the license makes the value wire-representable.
-      let big b = Member FBigSigned Nothing (Just b) "koka std/core/integer/bounded"
+      let big b = Member FBigSigned Nothing (Just b) EProbed "koka std/core/integer/bounded"
           req = StubRequest
             "koka:factorial_big/big-factorial"
             "koka:factorial_big_bounded/big-bounded-factorial"
@@ -417,8 +417,8 @@ spec = do
       -- the callee takes an unbounded-big argument (posTo), so no
       -- adapter and no effect map — the boxed-handle glue convention
       -- (C2) is the honest output for genuinely big values.
-      let bigU = Member FBigSigned Nothing Nothing "koka std/core/integer"
-          bigB = Member FBigSigned Nothing (Just 60) "koka std/core/integer/bounded60"
+      let bigU = Member FBigSigned Nothing Nothing ESpec "koka std/core/integer"
+          bigB = Member FBigSigned Nothing (Just 60) ESpec "koka std/core/integer/bounded60"
           req = StubRequest
             "koka:factorial_big/big-factorial"
             "koka:factorial_big_bounded/big-bounded-factorial"
@@ -432,8 +432,8 @@ spec = do
     it "keeps the OCaml bounded adapter glue uniformly int64_t (no void * luck)" $ do
       -- The OCaml gold's callee.c carried the same latent mismatch
       -- (63-bit member -> void * against an int64_t adapter entry).
-      let i64 = Member FSigned (Just 64) Nothing "std/i64"
-          ocB = Member FSigned (Just 63) (Just 61) "Stdlib/int/bounded61"
+      let i64 = Member FSigned (Just 64) Nothing ESpec "std/i64"
+          ocB = Member FSigned (Just 63) (Just 61) ESpec "Stdlib/int/bounded61"
           req = StubRequest
             "rust:factorial_rs/factorial"
             "ocaml:factorial_oc/island-factorial"

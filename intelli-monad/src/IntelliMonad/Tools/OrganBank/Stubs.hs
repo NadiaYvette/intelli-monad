@@ -48,7 +48,8 @@ import Data.Text (Text)
 import qualified Data.Text as T
 
 import IntelliMonad.Tools.OrganBank.Dictionary
-  ( Family (..)
+  ( Evidence (..)
+  , Family (..)
   , Member (..)
   , aggregate
   , license
@@ -634,7 +635,7 @@ emitAdapter req
 -- >>> import qualified Data.Text as T
 -- >>> import Data.Maybe (fromMaybe)
 -- >>> :{
--- let big b = Member FBigSigned Nothing (Just b) "koka std/core/integer/bounded"
+-- let big b = Member FBigSigned Nothing (Just b) EProbed "koka std/core/integer/bounded"
 --     req = StubRequest
 --       "koka:factorial_big/big-factorial"
 --       "koka:factorial_big_bounded/big-bounded-factorial"
@@ -820,8 +821,8 @@ fixtureHaskellRust =
     { srCaller = "haskell:Factorial/factorial",
       srCallee = "rust:factorial/factorial",
       srPositions =
-        [ Position "arg 0" (Member FSigned (Just 64) Nothing "ghc-prim/Int#") (Member FSigned (Just 64) Nothing "std/i64"),
-          Position "result" (Member FSigned (Just 64) Nothing "std/i64") (Member FSigned (Just 64) Nothing "ghc-prim/Int#")
+        [ Position "arg 0" (Member FSigned (Just 64) Nothing ESpec "ghc-prim/Int#") (Member FSigned (Just 64) Nothing ESpec "std/i64"),
+          Position "result" (Member FSigned (Just 64) Nothing ESpec "std/i64") (Member FSigned (Just 64) Nothing ESpec "ghc-prim/Int#")
         ],
       srCallerEffects = [],
       srCalleeEffects = [],
@@ -838,8 +839,8 @@ fixtureCWidened =
     { srCaller = "c:factorial/factorial",
       srCallee = "rust:factorial/factorial",
       srPositions =
-        [ Position "arg 0" (Member FSigned (Just 32) Nothing "std/int32") (Member FSigned (Just 64) Nothing "std/i64"),
-          Position "result" (Member FSigned (Just 32) Nothing "std/i32") (Member FSigned (Just 32) Nothing "std/int32")
+        [ Position "arg 0" (Member FSigned (Just 32) Nothing ESpec "std/int32") (Member FSigned (Just 64) Nothing ESpec "std/i64"),
+          Position "result" (Member FSigned (Just 32) Nothing ESpec "std/i32") (Member FSigned (Just 32) Nothing ESpec "std/int32")
         ],
       srCallerEffects = [],
       srCalleeEffects = [],

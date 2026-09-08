@@ -20,7 +20,9 @@ import IntelliMonad.Tools.OrganBank
 import IntelliMonad.Tools.OrganBank.Dictionary
   ( Family (..),
     Member (..),
+    Evidence (..),
     aggregate,
+    axiomLine,
     license,
     licenseBig,
     memberOf,
@@ -54,13 +56,13 @@ spec = do
       memberOf "c" "std" "int24" `shouldBe` Nothing
 
   describe "license" $ do
-    let m f w note = Member f w Nothing note
+    let m f w note = Member f w Nothing ESpec note
     it "licenses equal-width same-family crossings as lossless" $
       license (m FSigned (Just 32) "a") (m FSigned (Just 32) "b") `shouldBe`
-        ("licensed-lossless", ["axiom: signed-int (32 bits) — a", "axiom: signed-int (32 bits) — b", "same family, no range question"])
+        ("licensed-lossless", ["axiom: signed-int (32 bits) [ESpec] — a", "axiom: signed-int (32 bits) [ESpec] — b", "same family, no range question"])
 
     it "licenses same-family same-width regardless of the note text" $ do
-      let (v, _) = license (Member FSigned (Just 64) Nothing "x") (Member FSigned (Just 64) Nothing "y")
+      let (v, _) = license (Member FSigned (Just 64) Nothing ESpec "x") (Member FSigned (Just 64) Nothing ESpec "y")
       v `shouldBe` "licensed-lossless"
 
     it "licenses widening only upward" $ do
@@ -85,13 +87,13 @@ spec = do
       v `shouldBe` "unlicensed-family"
 
     it "refuses implementation-defined precision (no range axiom)" $ do
-      let (v, _) = license (Member FSigned Nothing Nothing "sml int") (m FSigned (Just 64) "")
+      let (v, _) = license (Member FSigned Nothing Nothing ESpec "sml int") (m FSigned (Just 64) "")
       v `shouldBe` "unlicensed-range"
 
     it "licenses bigint pairs by domain: signed->signed lossless, signed->Nat refused, Nat->signed lossless" $ do
-      let (vSS, _) = license (Member FBigSigned Nothing Nothing "a") (Member FBigSigned Nothing Nothing "b")
-          (vSU, axSU) = license (Member FBigSigned Nothing Nothing "a") (Member FBigUnsigned Nothing Nothing "b")
-          (vUS, _) = license (Member FBigUnsigned Nothing Nothing "a") (Member FBigSigned Nothing Nothing "b")
+      let (vSS, _) = license (Member FBigSigned Nothing Nothing ESpec "a") (Member FBigSigned Nothing Nothing ESpec "b")
+          (vSU, axSU) = license (Member FBigSigned Nothing Nothing ESpec "a") (Member FBigUnsigned Nothing Nothing ESpec "b")
+          (vUS, _) = license (Member FBigUnsigned Nothing Nothing ESpec "a") (Member FBigSigned Nothing Nothing ESpec "b")
       vSS `shouldBe` "licensed-lossless"
       vSU `shouldBe` "unlicensed-overflow-domain"
       any ("below zero" `T.isInfixOf`) axSU `shouldBe` True
@@ -99,15 +101,15 @@ spec = do
 
     it "refuses bigint against fixed-width without a declared bound; fixed->big is lossless (C5)" $ do
       -- big->fixed with no bound: no range both sides agreed to honor.
-      let (v1, ax1) = license (Member FBigSigned Nothing Nothing "arbitrary") (m FSigned (Just 64) "")
+      let (v1, ax1) = license (Member FBigSigned Nothing Nothing ESpec "arbitrary") (m FSigned (Just 64) "")
       v1 `shouldBe` "unlicensed-unbounded"
       any ("unbounded" `T.isInfixOf`) ax1 || any ("no declared bound" `T.isInfixOf`) ax1 `shouldBe` True
       -- fixed->big: every fixed value is representable in the bigint
       -- domain (the C5 correction — C4 refused both directions with
       -- one rule; only big->fixed has anything to verify).
-      let (v2, _) = license (m FSigned (Just 64) "") (Member FBigSigned Nothing Nothing "arbitrary")
+      let (v2, _) = license (m FSigned (Just 64) "") (Member FBigSigned Nothing Nothing ESpec "arbitrary")
       v2 `shouldBe` "licensed-lossless"
-      let (v3, _) = license (Member FBigUnsigned Nothing Nothing "arbitrary") (m FUnsigned (Just 32) "")
+      let (v3, _) = license (Member FBigUnsigned Nothing Nothing ESpec "arbitrary") (m FUnsigned (Just 32) "")
       v3 `shouldBe` "unlicensed-overflow-domain"
 
     it "admits dynamic sides only with runtime checks" $ do
@@ -139,10 +141,10 @@ spec = do
       aggregate ["licensed-lossless", "something-new"] `shouldBe` Just "something-new"
 
   describe "license (C5 bounded marshaling contract)" $ do
-    let fix w b note = Member FSigned (Just w) b note
+    let fix w b note = Member FSigned (Just w) b ESpec note
         -- A bounded big carries its wire carrier width too (the check
         -- needs the value in int64_t form): GHC Integer over i64 wire.
-        big w b note = Member FBigSigned (Just w) b note
+        big w b note = Member FBigSigned (Just w) b EPracticed note
     it "big->fixed with a declared bound is licensed-bounded" $
       let (v, ax) = license (big 64 (Just 60) "GHC Integer") (fix 64 Nothing "rust i64")
       in do
@@ -164,7 +166,7 @@ spec = do
       in v `shouldBe` "licensed-lossless"
 
     it "fixed->big with a bound is licensed-bounded (narrowing rescue)" $
-      let (v, ax) = license (fix 64 Nothing "rust i64") (Member FSigned (Just 63) (Just 61) "ocaml int (63-bit)")
+      let (v, ax) = license (fix 64 Nothing "rust i64") (Member FSigned (Just 63) (Just 61) ESpec "ocaml int (63-bit)")
       in do
         v `shouldBe` "licensed-bounded"
         any ("2^61" `T.isInfixOf`) ax `shouldBe` True
@@ -205,7 +207,7 @@ spec = do
       -- asked against the fixed side only. Demanding a width the
       -- convention does not give would refuse the FBig demo's result
       -- direction (bounded-big callee -> std/i64 caller).
-      let (v, _) = licenseBig (Member FBigSigned Nothing (Just 60) "koka std/core/integer/bounded60") (fix 64 Nothing "w")
+      let (v, _) = licenseBig (Member FBigSigned Nothing (Just 60) ESpec "koka std/core/integer/bounded60") (fix 64 Nothing "w")
       in v `shouldBe` "licensed-bounded"
 
   describe "boundaryReport dictionary integration (direction-aware)" $ do
@@ -259,6 +261,26 @@ spec = do
           m2 = fnMod "std" "int" "int"
           rep = boundaryReport args (Just "mercury") m1 (typeHeadline m1) (Just "mercury") m2 (typeHeadline m2)
       brVerdict rep `shouldBe` "identical"
+  describe "evidence tags" $ do
+    it "renders the evidence class on the axiom citation line" $
+      axiomLine (Member FSigned (Just 32) Nothing EProbed "probe-backed")
+        `shouldBe` "axiom: signed-int (32 bits) [EProbed] — probe-backed"
+
+    it "renders every class" $
+      map (T.isInfixOf "[E")
+        [ axiomLine (Member FSigned (Just 8) Nothing ESpec ""),
+          axiomLine (Member FSigned (Just 8) Nothing EPracticed ""),
+          axiomLine (Member FSigned (Just 8) Nothing EProbed ""),
+          axiomLine (Member FSigned (Just 8) Nothing EConventional "")
+        ]
+        `shouldBe` [True, True, True, True]
+
+    it "fails closed: the table has no untagged entry" $ do
+      -- every (lang, qname) in the real table must carry an evidence
+      -- class; spot-check one entry from each block boundary.
+      mEvidence <$> memberOf "core" "core" "text" `shouldBe` Just EConventional
+      mEvidence <$> memberOf "koka" "std/core" "integer/bounded60" `shouldBe` Just EProbed
+      mEvidence <$> memberOf "rust" "std" "i128" `shouldBe` Just ESpec
   where
     -- Build a fn type whose qnames live in a given module, so dictionary
     -- lookups hit the real axiom table: (mod/name ...) -> {std/pure} mod/name.
@@ -279,3 +301,4 @@ spec = do
     con m n = A.object ["con" A..= A.object ["qname" A..= bareQ m n]]
     bareQ :: Text -> Text -> A.Value
     bareQ m n = A.object ["module" A..= m, "name" A..= A.object ["text" A..= n]]
+
