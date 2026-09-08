@@ -7,6 +7,12 @@
  * island's own convention (organ-bank doc/abi-notes/ocaml.md §2).
  *)
 let rec island_factorial n =
-  if n < 2 then 1 else n * island_factorial (n - 1)
+  (* Effect-map contract: the island's own exception (distinct from the
+     wire-side bound guard) must surface as the wire's status sentinel
+     via caml_callback_exn in the generated adapter — and the RTS must
+     stay usable afterwards. The island domain stops at 25! so out-of-
+     domain inputs raise instead of silently wrapping the int63. *)
+  if n > 25 then raise (Invalid_argument "island domain: input > 25")
+  else if n < 2 then 1 else n * island_factorial (n - 1)
 
 let () = Callback.register "island-factorial" island_factorial

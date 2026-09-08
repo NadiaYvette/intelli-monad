@@ -298,6 +298,73 @@ ocamlBoundedDoc =
     ocCon :: Text -> Text -> A.Value
     ocCon m n = A.object ["con" A..= A.object ["qname" A..= A.object ["module" A..= m, "name" A..= A.object ["text" A..= n]]]]
 
+-- | The FBig (arbitrary-precision) caller document: koka's unbounded
+-- std/core/integer member on arg and result.
+kokaBigDoc :: A.Value
+kokaBigDoc =
+  A.object
+    [ "schema_version" A..= ("1.0.0" :: Text),
+      "metadata"
+        A..= A.object
+          [ "source_language" A..= ("koka" :: Text),
+            "shim_version" A..= ("0.1.0" :: Text)
+          ],
+      "module"
+        A..= A.object
+          [ "name" A..= ("factorial_big" :: Text),
+            "definitions"
+              A..= [ def "factorial_big" "big-factorial" "public"
+                       (A.object
+                          [ "fn" A..= A.object
+                              [ "args" A..= [A.object ["multiplicity" A..= ("many" :: Text), "type" A..= kokaCon "std/core" "integer"]],
+                                "effect" A..= A.object ["effects" A..= [kokaBare "std/core" "div", kokaBare "std/core" "exn"]],
+                                "result" A..= kokaCon "std/core" "integer"
+                              ]
+                          ])
+                   ],
+            "data_types" A..= ([] :: [A.Value]),
+            "effect_decls" A..= ([] :: [A.Value])
+          ]
+    ]
+  where
+    kokaCon m n = A.object ["con" A..= A.object ["qname" A..= kokaBare m n]]
+    kokaBare :: Text -> Text -> A.Value
+    kokaBare m n = A.object ["module" A..= m, "name" A..= A.object ["text" A..= n]]
+
+-- | The FBig bounded callee document: std/core/integer/bounded60 —
+-- the unbounded big-int domain narrowed by a declared both-sides
+-- contract (|v| < 2^60).
+kokaBigBoundedDoc :: A.Value
+kokaBigBoundedDoc =
+  A.object
+    [ "schema_version" A..= ("1.0.0" :: Text),
+      "metadata"
+        A..= A.object
+          [ "source_language" A..= ("koka" :: Text),
+            "shim_version" A..= ("0.1.0" :: Text)
+          ],
+      "module"
+        A..= A.object
+          [ "name" A..= ("factorial_big_bounded" :: Text),
+            "definitions"
+              A..= [ def "factorial_big_bounded" "big-bounded-factorial" "public"
+                       (A.object
+                          [ "fn" A..= A.object
+                              [ "args" A..= [A.object ["multiplicity" A..= ("many" :: Text), "type" A..= kokaCon "std/core/integer" "bounded60"]],
+                                "effect" A..= A.object ["effects" A..= [kokaBare "std/core" "div", kokaBare "std/core" "exn"]],
+                                "result" A..= kokaCon "std/core/integer" "bounded60"
+                              ]
+                          ])
+                   ],
+            "data_types" A..= ([] :: [A.Value]),
+            "effect_decls" A..= ([] :: [A.Value])
+          ]
+    ]
+  where
+    kokaCon m n = A.object ["con" A..= A.object ["qname" A..= kokaBare m n]]
+    kokaBare :: Text -> Text -> A.Value
+    kokaBare m n = A.object ["module" A..= m, "name" A..= A.object ["text" A..= n]]
+
 withFreshIndex :: (FilePath -> IO a) -> IO a
 withFreshIndex act = do
   tmpRoot <- getTemporaryDirectory
@@ -311,6 +378,8 @@ withFreshIndex act = do
           f6 = tmp ++ "/factorial_kk_bounded.json"
           f7 = tmp ++ "/factorial_rs_i64.json"
           f8 = tmp ++ "/factorial_oc_bounded.json"
+          f9 = tmp ++ "/factorial_big.json"
+          f10 = tmp ++ "/factorial_big_bounded.json"
       A.encodeFile f1 sampleDoc
       A.encodeFile f2 rustDoc
       A.encodeFile f3 haskellPureDoc
@@ -319,6 +388,8 @@ withFreshIndex act = do
       A.encodeFile f6 kokaBoundedDoc
       A.encodeFile f7 rustI64Doc
       A.encodeFile f8 ocamlBoundedDoc
+      A.encodeFile f9 kokaBigDoc
+      A.encodeFile f10 kokaBigBoundedDoc
       old <- lookupEnv "ORGAN_INDEX"
       setEnv "ORGAN_INDEX" (tmp ++ "/index.db")
       r <- act tmp
@@ -355,7 +426,7 @@ spec = do
       (ok, bad, errs) <- withFreshIndex $ \tmp -> do
         idx <- defaultOrganIndex
         ingestPath idx tmp
-      ok `shouldBe` 8
+      ok `shouldBe` 10
       bad `shouldBe` 0
       errs `shouldBe` []
 
@@ -364,7 +435,7 @@ spec = do
         writeFile (tmp ++ "/broken.json") "{not json"
         idx <- defaultOrganIndex
         ingestPath idx tmp
-      ok `shouldBe` 8
+      ok `shouldBe` 10
       bad `shouldBe` 1
 
   describe "diag envelope ingestion (organ-extract --diag)" $ do
@@ -643,7 +714,11 @@ spec = do
             adapterTxt = T.unpack (T.unlines (opsoAdapter out))
         opsoVerdict out `shouldBe` "licensed-bounded"
         adapterTxt `shouldContain` "// ABI adapter: OCaml island (generated, C4)"
-        adapterTxt `shouldContain` "caml_callback"
+        -- Effect map: the island's exceptions surface as the wire's
+        -- sentinel (caml_callback_exn + Is_exception_result), not a
+        -- process-terminating caml_callback.
+        adapterTxt `shouldContain` "caml_callback_exn"
+        adapterTxt `shouldContain` "Is_exception_result(r)"
         -- The bound check guards before the box, and a violation
         -- returns the wire's status sentinel.
         adapterTxt `shouldContain` "2305843009213693952" -- 2^61 literal
@@ -652,6 +727,30 @@ spec = do
         -- The RTS lifecycle entries follow the namespace convention.
         adapterTxt `shouldContain` "omni_oc_factorial_oc_island_init"
         adapterTxt `shouldContain` "caml_main"
+
+    it "licenses the FBig big-big bounded crossing over the wire" $
+      withFreshIndex $ \tmp -> do
+        idx <- defaultOrganIndex
+        _ <- ingestPath idx tmp
+        -- koka's UNBOUNDED arbitrary-precision int calling a BOUNDED
+        -- bigint island: before the FBig gate this was silently
+        -- licensed-lossless (the boundGate exited for non-int pairs).
+        -- The wire's int64 ABI is the carrier; the shim checks the
+        -- bound in koka's exact big-int arithmetic.
+        r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_big" "big-factorial" (Just "koka") "factorial_big_bounded" "big-bounded-factorial" (Just "koka") (Just "kk_big_island") (Just "kk_big_island") True)
+        let out = organPlanStubOutput r
+            emapTxt = T.unpack (T.unlines (opsoEffectMap out))
+        -- Not lossless: the declared bound converts the crossing to
+        -- the checked form.
+        opsoVerdict out `shouldBe` "licensed-bounded"
+        -- The shim guards both corners in the callee's big-int domain:
+        emapTxt `shouldContain` "bcheck_arg_1"
+        emapTxt `shouldContain` "bcheck_result"
+        emapTxt `shouldContain` "1152921504606846976" -- 2^60 literal
+        emapTxt `shouldContain` "handle/try("
+        emapTxt `shouldContain` "min-int64"
+        opsoVerdict out `shouldNotBe` "licensed-lossless"
 
   where
     sameArgs ta tb =

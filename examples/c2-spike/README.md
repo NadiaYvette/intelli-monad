@@ -223,3 +223,13 @@ Manual gcc linking against `libasmrun.a` fails: `caml_globals`/
 is deleted even on success. That constraint is why the OCaml gold is
 a C-host + OCaml + rust process rather than a fourth island inside
 `run_multi.sh` (see the honest note in `doc/phase-c-transplant.md`).
+
+## Effect map (C5 follow-up, 2026-09-08)
+
+The generated OCaml adapter now calls `caml_callback_exn` instead of
+`caml_callback`: the island's own exceptions arrive as an
+exception-result value instead of terminating the process, and the
+adapter maps them to the wire's status sentinel — the same contract
+koka's `handle/try` shim honors. `run_ocaml.sh` proves it live: the
+spike island raises `Invalid_argument` for inputs above 25, the
+sentinel fires, and the RTS stays usable (the next call computes `5!`).

@@ -407,3 +407,37 @@ A single binary with GHC + OCaml + kklib + rust would need that object
 captured by poisoning the link or replicating the startup codegen, so
 the OCaml gold runs in a C-host + OCaml + rust process (ocamlopt as
 link driver) instead of joining `run_multi.sh`'s three-runtime host.
+
+## C5 completion — FBig crossings, guard pins, OCaml effect map (2026-09-08)
+
+Three follow-ups to the bounded-contract milestone:
+
+1. **FBig member-family crossings.** `boundGate` previously exited for
+   non-int pairs, so an unbounded bigint caller into a bounded bigint
+   callee was silently `licensed-lossless`. Big-big pairs now
+   participate: the wire's int64 ABI is the carrier (bound 60 fits with
+   sentinel headroom), verdict `licensed-bounded`, and the generated
+   koka shim checks the bound in the island's exact big-int arithmetic.
+   Bounded-big → unbounded-big is honored by construction. Dictionary
+   entry `koka std/core/integer/bounded60`; wire test
+   `licenses the FBig big-big bounded crossing over the wire`.
+
+2. **Guard-boundary pins.** The declared contract is strict inequality
+   (`|v| < 2^b`): corners `2^b`/`-2^b` violate, `2^b-1`/`-(2^b-1)`
+   pass. StubSpec now pins the exact emitted comparisons for both
+   emitters (koka bcheck shim, OCaml pre-boxing adapter) — a regression
+   to the old `x < -2^b` off-by-one fails the suite.
+
+3. **OCaml effect map.** The generated OCaml adapter calls
+   `caml_callback_exn` and maps `Is_exception_result(r)` to the wire's
+   status sentinel — OCaml islands join the same sentinel contract as
+   koka's `handle/try` shim, and the RTS stays usable after a raised
+   exception (proven live: the exception path fires, then `5!` still
+   computes). The spike island declares its own domain cap (input > 25
+   raises `Invalid_argument`) so the path is exercised end-to-end.
+
+Verification: 209 hspec examples + 102 doctests green; all seven spike
+scripts pass (`run.sh`, `run_koka.sh`, `run_koka_generated.sh`,
+`run_refused.sh`, `run_koka_mapped.sh`, `run_bounded.sh`,
+`run_ocaml.sh` — the last now with 8 contract paths including the two
+effect-map checks).

@@ -440,7 +440,11 @@ emitAdapter req = case (calleeLang, srCalleeExport req, srCalleeAdapter req) of
       , "// Projects the wire's plain int64_t ABI onto OCaml's 63-bit tagged"
       , "// int: boxing is Val_long ((n << 1) + 1), unboxing Long_val. The"
       , "// island registers its entry via Callback.register; the adapter"
-      , "// fetches the closure with caml_named_value and calls caml_callback."
+      , "// fetches the closure with caml_named_value and calls"
+      , "// caml_callback_exn: the island's exceptions arrive as an"
+      , "// exception-result value instead of terminating the process,"
+      , "// and surface as the wire's status sentinel -- OCaml islands"
+      , "// join the same sentinel contract as koka's handle/try shim."
       , "// The OCaml RTS is brought up once (caml_main) and lives until"
       , "// process exit -- there is no done call. ABI-proven live 2026-09-07"
       , "// (see organ-bank doc/abi-notes/ocaml.md); the host links via"
@@ -465,7 +469,13 @@ emitAdapter req = case (calleeLang, srCalleeExport req, srCalleeAdapter req) of
       ]
       <> ocGuard
       <>
-      [ "  value r = caml_callback(*caml_named_value(\"" <> ocValue <> "\"), Val_long(n));"
+      [ "  value r = caml_callback_exn(*caml_named_value(\"" <> ocValue <> "\"), Val_long(n));"
+      , "  if (Is_exception_result(r)) {"
+      , "    /* effect map: the island raised; the wire's status sentinel"
+      , "       carries the failure (Is_exception_result cannot collide"
+      , "       with a boxed Long_val result -- Val_long's low bits are 01 or 11). */"
+      , "    return (-0x7fffffffffffffffLL - 1);"
+      , "  }"
       , "  return (int64_t) Long_val(r);"
       , "}"
       ]

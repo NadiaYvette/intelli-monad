@@ -50,6 +50,12 @@ int main(void)
   check("arg guard: +2^61 violates |v| < 2^61 -> sentinel", (long long)ocaml_island_factorial(2305843009213693952LL), (long long)SENTINEL);
   check("arg guard: -2^61 violates |v| < 2^61 -> sentinel", (long long)ocaml_island_factorial(-2305843009213693952LL), (long long)SENTINEL);
   check("in-range: -1 passes the guard (|v| < 2^61)", (long long)ocaml_island_factorial(-1), 1LL);
+  /* Effect-map contract: the island's OWN exception (30 passes the
+   * arg guard but is outside the island's domain) arrives as an
+   * exception-result from caml_callback_exn and surfaces as the wire
+   * sentinel — the process survives, unlike a raw caml_callback. */
+  check("effect map: island exception (30) -> sentinel", (long long)ocaml_island_factorial(30), (long long)SENTINEL);
+  check("rts alive after exception: 5! still real", (long long)ocaml_island_factorial(5), 120LL);
 
   omni_oc_factorial_oc_island_done();
   return fails ? 1 : 0;

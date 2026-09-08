@@ -339,3 +339,36 @@ spec = do
           ls = renderCStubs (planBoundary req)
           idxOf s = length (takeWhile (not . T.isInfixOf s) ls)
       idxOf "---- effect map" `shouldSatisfy` (> idxOf "// ABI adapter")
+
+  describe "C5: guard boundary semantics (|v| < 2^b, both corners violate)" $ do
+    -- The declared contract is STRICT inequality: the generated guard
+    -- must reject exactly |v| >= 2^b. The corners 2^b and -2^b are
+    -- violations; 2^b-1 and -(2^b-1) pass. The comparison operators in
+    -- the emitted text are the contract — a regression to `x < -2^b`
+    -- (the off-by-one that let exactly -2^b through) must fail here.
+    it "emits the koka bcheck with >= / <= on both corners" $ do
+      let big b = Member FBigSigned Nothing (Just b) "koka std/core/integer/bounded"
+          req = StubRequest
+            "koka:factorial_big/big-factorial"
+            "koka:factorial_big_bounded/big-bounded-factorial"
+            [ Position "arg 0" (big 60) (big 60)
+            , Position "result" (big 60) (big 60)
+            ]
+            ["std/core/div"] ["std/core/div", "std/core/exn"]
+            (Just "kk_big_island") (Just "kk_big_island") True
+          shim = T.unpack (T.unlines (fromMaybe [] (spEffectMap (planBoundary req))))
+      shim `shouldContain` "x >= 1152921504606846976 || x <= 0 - 1152921504606846976" -- 2^60
+      shim `shouldNotContain` "x > 1152921504606846976"
+      shim `shouldNotContain` "x < 0 - 1152921504606846976"
+    it "emits the OCaml pre-boxing guard with >= / <= on both corners" $ do
+      let req = StubRequest
+            "rust:factorial_rs/factorial"
+            "ocaml:factorial_oc/island-factorial"
+            [ Position "arg 0" (Member FSigned (Just 64) Nothing "std/i64") (Member FSigned (Just 63) (Just 61) "Stdlib/int/bounded61")
+            , Position "result" (Member FSigned (Just 63) (Just 61) "Stdlib/int/bounded61") (Member FSigned (Just 64) Nothing "std/i64")
+            ]
+            [] [] (Just "ocaml_island_factorial") (Just "ocaml_island_factorial") False
+          adapter = T.unpack (T.unlines (fromMaybe [] (spAdapter (planBoundary req))))
+      adapter `shouldContain` "n >= 2305843009213693952 || n <= 0 - 2305843009213693952" -- 2^61
+      adapter `shouldNotContain` "n < 2305843009213693952"
+      adapter `shouldNotContain` "n > 0 - 2305843009213693952"

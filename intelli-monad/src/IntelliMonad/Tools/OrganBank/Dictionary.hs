@@ -164,6 +164,7 @@ table =
           (("koka", "std/core/int/bounded60"), Member FSigned (Just 64) (Just 60) "Koka std/core/int carried over the wire's unboxed int64 ABI with a DECLARED BOUND |v| < 2^60: both sides honor the range, the generated glue checks it and raises the wire's status sentinel on violation (C5 bounded-marshaling license)"),
           (("koka", "std/core/int/bounded61"), Member FSigned (Just 63) (Just 61) "Koka std/core/int with declared bound |v| < 2^61: fits the unboxed smallint payload (KK_TAG_BITS=1) exactly — the checked contract needs no heap bigint on either side"),
           (("koka", "std/core/integer"), Member FBigSigned Nothing Nothing "Koka kklib.h: int is arbitrary precision (63-bit smallint payload + heap bigints) — the full unbounded domain, distinct from the ABI-modeled i64 range"),
+          (("koka", "std/core/integer/bounded60"), Member FBigSigned Nothing (Just 60) "Koka std/core/integer under a declared bound |v| < 2^60: the unbounded big-int domain narrowed by a both-sides contract — the shim checks it in koka's exact big-int arithmetic and violations ride the handle/try sentinel (C5 FBig license; the unbounded big crossing it replaces is not silently lossless)"),
           (("koka", "std/core/float64"), Member FFloat (Just 64) Nothing "Koka docs: float64 IEEE-754 double")
         ],
         -- Fortran: gfortran default INTEGER is kind=4 (32 bits); the
@@ -255,6 +256,29 @@ memberOf lang mdl nm
 -- "unlicensed-family"
 -- >>> fst (license (mb FSigned (Just 64) 60 "") (m FSigned (Just 63) ""))
 -- "licensed-bounded"
+--
+-- The runtime guard generated for a declared bound @b@ (both
+-- emitters: the koka bcheck shim and the OCaml pre-boxing adapter)
+-- rejects exactly @|v| >= 2^b@ — the boundary corners @2^b@ and
+-- @-2^b@ are violations, @2^b-1@ and @-(2^b-1)@ pass. StubSpec pins
+-- the emitted comparison operators; run_bounded.sh and run_ocaml.sh
+-- exercise the corners live.
+-- FBig families participate: an unbounded bigint caller into a
+-- bounded bigint callee is a checked crossing, not silent lossless —
+-- the wire's int64 ABI is the carrier (bound 60 fits with sentinel
+-- headroom) and the shim checks the bound in exact big-int arithmetic.
+--
+-- >>> let bigU = Member FBigSigned Nothing Nothing "koka std/core/integer"
+-- >>> let bigB = Member FBigSigned Nothing (Just 60) "koka std/core/integer/bounded60"
+-- >>> fst (license bigU bigB)
+-- "licensed-bounded"
+--
+-- A bounded big source into an unbounded big destination is honored
+-- by construction (the source's declared range is inside the target's
+-- unbounded domain).
+--
+-- >>> fst (license bigB bigU)
+-- "licensed-lossless"
 license :: Member -> Member -> (Text, [Text])
 license a b = boundGate baseCase
   where
@@ -269,13 +293,17 @@ license a b = boundGate baseCase
     -- wire. Explicit bounds convert narrowings into checked
     -- crossings and annotate licensed crossings with their axiom.
     boundGate base@(v, axioms)
-      | not (isInt (mFamily a) && isInt (mFamily b)) = base
+      -- FBig families (arbitrary precision) participate too: a big
+      -- side has no width axiom to answer the headroom question from
+      -- its own representation, so the wire's int64 ABI is the
+      -- carrier (see 'carrierOf' below).
+      | not ((isInt (mFamily a) && isInt (mFamily b)) || (isBig (mFamily a) && isBig (mFamily b))) = base
       | mBound a == Nothing && mBound b == Nothing = base
       | otherwise = case (mBound a, mBound b) of
           (Just sa, Just sb)
             | "unlicensed" `T.isPrefixOf` v && v /= "unlicensed-narrowing" -> base
             | sa <= sb, "licensed" `T.isPrefixOf` v -> (v, axioms ++ [fitsLine sa])
-            | otherwise -> checked sb (mWidth b) axioms
+            | otherwise -> checked sb (carrierOf b) axioms
           (Just sa, Nothing)
             | "licensed" `T.isPrefixOf` v -> (v, axioms ++ [fitsLine sa])
             -- Narrowing rescue by the source's own declared domain:
@@ -294,9 +322,14 @@ license a b = boundGate baseCase
           -- the contract); headroom decides admissibility.
           (Nothing, Just sb)
             | "unlicensed" `T.isPrefixOf` v && v /= "unlicensed-narrowing" -> base
-            | otherwise -> checked sb (mWidth b) axioms
+            | otherwise -> checked sb (carrierOf b) axioms
           _ -> base
       where
+        -- The representation that carries a checked bound: a fixed
+        -- destination carries it itself; a big destination has no
+        -- width to speak for it, so the wire's int64 ABI is the
+        -- carrier and headroom is asked against 64 bits.
+        carrierOf m = if isBig (mFamily m) then Just 64 else mWidth m
         fitsLine sa = T.pack ("source's declared range |v| < 2^" ++ show sa ++ " fits the destination's representable range - honored by construction")
     -- The magnitude a representation of @w@ bits can hold: |v| <= 2^c
     -- for signed (the sentinel corner excluded separately), |v| < 2^w
