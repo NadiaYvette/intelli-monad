@@ -441,3 +441,88 @@ scripts pass (`run.sh`, `run_koka.sh`, `run_koka_generated.sh`,
 `run_refused.sh`, `run_koka_mapped.sh`, `run_bounded.sh`,
 `run_ocaml.sh` — the last now with 8 contract paths including the two
 effect-map checks).
+
+## Positioning — islands are interim; the dictionary is the permanent artifact (2026-09-08)
+
+Q: does the island/runtime-memory work (C2–C5 gold loops) undermine
+organ-bank's intended use by frankenstein, which routes every language
+through a Koka-shaped Core IR running on Perceus reference counting?
+
+A: no — the islands are bridge-tier scaffolding for the world *before*
+frankenstein's unification exists, and the knowledge they produce is
+exactly what the unification needs.
+
+### Why the endgame dissolves, not solves, the island problem
+
+Frankenstein's pipeline (per its README): GHC / Mercury / rustc
+frontends → shared Koka-like Core IR → Perceus refcounting → MLIR →
+LLVM. In that endgame a Mercury or OCaml function lowered through the
+pipeline *is* Perceus-runtime code, so calling it is an ordinary
+function call — no ABI projection, no RTS init contract, no status
+sentinel. The runtime-island problem does not get "solved"; it stops
+arising. (Framing note: what is adopted from Koka is the IR shape and
+the Perceus resource model — the Koka *frontend* is not special in the
+pipeline; it is a donor like the rest.)
+
+### What the islands are actually for
+
+Today every language still runs under its own RTS (GHC's, kklib's,
+OCaml's), and the dictionary's axioms are claims about those real
+runtimes. The gold loops exist to make those claims *verified*, not to
+become the product:
+
+- **The dictionary is the Perceus-relevant knowledge.** The axiom table
+  — OCaml's 63-bit tagged `int`, Koka's `KK_TAG_BITS=1` smallint
+  payload, GHC's `StgInt`, the sentinel-headroom rule — is precisely
+  the representation knowledge frankenstein's Core-IR lowering must
+  respect to keep Perceus refcounting correct across donor languages.
+  Every gold loop is a live falsification test of one or more of those
+  axioms ("demonstrated by compiling and linking, not read from docs").
+- **The boundary machinery survives unification, redirected.** After
+  unification, `organ_check_boundary` stops being a *permission* layer
+  for FFI crossings and becomes an *audit* layer: it verifies the
+  lowering did not silently change a representation, and it stays
+  genuinely necessary for code that never goes through the pipeline —
+  C libraries, prebuilt native artifacts, OS interfaces, and the
+  interim period where islands still exist.
+- **The MCP surface is the usability contract.** Frankenstein's agent
+  side is intelli-monad; `organ_ingest`, `organ_plan_stub`, and the
+  diagnostics sidecar are how an agent consumes organ-bank. That read
+  side is what this Phase C hardens.
+
+### What is untouched for the intended use
+
+- OrganIR's data model and the 29-shim producer contract have not
+  changed. Everything added is read-side (Dictionary, Stubs, Interop in
+  intelli-monad) plus demo islands that *consume* OrganIR; a
+  frankenstein-side producer is unaffected.
+- Nothing emitted assumes islands are the destination. The adapters are
+  keyed on "the island's runtime" — i.e., the interim reality.
+
+### The honest caveat
+
+If the endgame is the priority, further island demos have diminishing
+returns. The higher-leverage organ-bank work is deepening the
+dictionary/axiom layer — that is the knowledge the lowering needs — and
+the FBig / boxed-value / threading probes should be read as inputs to
+the dictionary, not as a permanent FFI framework. This section records
+that priority so the tooling effort does not drift.
+
+## Quad gold — four runtimes, one process (2026-09-08)
+
+`examples/c2-spike/run_quad.sh` closes the C4 milestone at full scale:
+C host + GHC RTS + kklib + OCaml RTS (+ runtime-free rust islands) in
+ONE process, all island-facing artifacts wire-generated through
+`organ_plan_stub` over the real `mcp-serve` binary. The link finding
+generalizes the OCaml ABI note: `ghc -v` shows ghc's own link line
+resolves the four-runtime object set except the `caml_*` runtime
+symbols; the missing `caml_program`/frametable come from ocamlopt's
+per-link startup object, which `ocamlopt -dstartup` can be made to
+emit as assembly for externally-driven links. Ten contract paths
+pass, including the OCaml exception sentinel firing mid-process with
+all three RTSes alive afterwards.
+
+With this, C2–C5 all have live, wire-driven proofs; the remaining
+open stub note from C3 is documented in its section above. Per the
+positioning section: further demos now have diminishing returns — the
+next leverage is dictionary/axiom depth for frankenstein's lowering.

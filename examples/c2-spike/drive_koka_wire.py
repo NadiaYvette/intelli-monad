@@ -33,6 +33,14 @@ ap.add_argument("--bounded", action="store_true",
                      "std/core/int/bounded60 (|v| < 2^60) instead of std/core/int; "
                      "the verdict becomes licensed-bounded and the effect-map shim "
                      "gains the exact arg/result guards. Implies --effect-map.")
+ap.add_argument("--big", action="store_true",
+                help="C5 FBig: type the island with the FBig-family member "
+                     "std/core/integer/bounded60 (arbitrary-precision domain under a "
+                     "declared bound |v| < 2^60) instead of std/core/int; the crossing "
+                     "takes the FBig license path (big-big gate, widthless big side, "
+                     "wire int64 carrier) and the glue is typed to the wire ABI by "
+                     "contract. Same compiled island as --bounded -- the license, not "
+                     "the codegen, is what changes. Implies --effect-map.")
 args = ap.parse_args()
 
 out = pathlib.Path(args.build_dir)
@@ -83,7 +91,9 @@ rust = doc("rust", "factorial_rs", [
 # row <div,exn>. Caller row ∅ ⊆ callee row, so the subset rule licenses.
 # --bounded swaps the qnames to the declared-bound member: the C5
 # contract that licenses the same crossing with runtime checks.
-island_type = ("std/core/int", "bounded60") if args.bounded else ("std/core", "int")
+island_type = (("std/core/integer", "bounded60") if args.big
+               else ("std/core/int", "bounded60")) if (args.big or args.bounded) \
+               else ("std/core", "int")
 koka = doc("koka", "factorial", [
     defn("factorial", "island-factorial",
          fn([("std/core", "div"), ("std/core", "exn")],
@@ -127,7 +137,7 @@ send({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
           "opsModuleB": "factorial", "opsNameB": "island-factorial", "opsLangB": "koka",
           "opsCalleeExport": "kk_island_factorial",
           **({"opsCalleeAdapter": "kk_island_factorial"} if args.adapter else {}),
-          **({"opsEffectMap": True} if (args.effect_map or args.bounded) else {})}}})
+          **({"opsEffectMap": True} if (args.effect_map or args.bounded or args.big) else {})}}})
 plan = json.loads(recv()["result"]["content"][0]["text"])
 p.terminate()
 
@@ -149,7 +159,7 @@ if plan.get("opsoEffectMap"):
     emap_text = emap_lines if isinstance(emap_lines, str) else "\n".join(emap_lines)
     (out / "factorial_emap.kk").write_text(emap_text + "\n")
     print("wrote", out / "factorial_emap.kk", "(C3 effect-map shim)")
-want_verdict = "licensed-bounded" if args.bounded else "licensed-lossless"
+want_verdict = "licensed-bounded" if (args.bounded or args.big) else "licensed-lossless"
 if plan["opsoVerdict"] != want_verdict:
     print("UNEXPECTED VERDICT — full plan:", json.dumps(plan, indent=2))
 sys.exit(0 if plan["opsoVerdict"] == want_verdict else 1)

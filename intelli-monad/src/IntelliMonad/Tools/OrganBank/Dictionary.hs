@@ -450,8 +450,15 @@ licenseBig big fixed = case (mFamily big, mBound big, mWidth big, mWidth fixed) 
     ( "unlicensed-unbounded",
       [axiomLine big, axiomLine fixed, "no declared bound: the crossing has no range both sides agreed to honor"]
     )
-  (_, Just bBits, Just wBig, Just wFixed)
-    | bBits >= wBig || bBits + 1 >= wFixed ->
+  -- The headroom question needs only the FIXED side's width: the big
+  -- side's own width (when present) is an additional consistency
+  -- check, but a widthless big side (the C5 FBig convention — the
+  -- wire's int64 ABI is its carrier) declares its range by the bound
+  -- alone, so the gate must not demand a width the convention does
+  -- not give it (the bounded60 koka-integer callee is the live
+  -- demo's result direction).
+  (_, Just bBits, wBig, Just wFixed)
+    | maybe False (bBits >=) wBig || bBits + 1 >= wFixed ->
         ( "unlicensed-bound-headroom",
           [ axiomLine big,
             axiomLine fixed,

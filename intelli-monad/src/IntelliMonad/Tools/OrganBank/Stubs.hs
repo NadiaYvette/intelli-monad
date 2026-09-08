@@ -133,17 +133,18 @@ planBoundary req =
         (Just v, [])
           | "unlicensed" `T.isPrefixOf` v -> StubRefused v axiomLines
           | otherwise ->
-              StubPlan
+              let adapter = emitAdapter req
+                  adapterOwned = adapter /= Nothing
+               in StubPlan
                 { spVerdict = v
-                , spCallerSide = callerLines req perPos
-                , spCalleeSide = calleeLines req perPos
-                , spAdapter = emitAdapter req
+                , spCallerSide = callerLines req perPos adapterOwned
+                , spCalleeSide = calleeLines req perPos adapterOwned
+                , spAdapter = adapter
                 , spEffectMap = emitEffectMap req
                 , spMarshal =
-                    [posLabel p <> ": " <> conversionNote (posFrom p) (posTo p) | (p, _) <- perPos]
-                      <> [ effectNote (srCallerEffects req) (srCalleeEffects req)
-                         | not (null (srCallerEffects req)) || not (null (srCalleeEffects req))
-                         ]
+                    [posLabel p <> ": " <> conversionNote (posFrom p) (posTo p) | (p, _) <- perPos]                       <> [ effectNote (srCallerEffects req) (srCalleeEffects req)
+                          | not (null (srCallerEffects req)) || not (null (srCalleeEffects req))
+                          ]
                 }
 
 -- | Drop pure markers: @std/pure@ (and any qname whose name component
@@ -190,22 +191,93 @@ conversionNote from to = case (mFamily from, mFamily to, mWidth from, mWidth to)
 -- 128-bit and unwidthed values render as boxed handles (C2 owns the
 -- representation — emitting @__int128@ would bake in a GCC extension).
 cTypeOf :: Member -> Text
-cTypeOf m = case (mFamily m, mWidth m) of
-  (FBool, _) -> "_Bool"
-  (FText, _) -> "const char *"
-  (FUnit, _) -> "void"
+cTypeOf = maybe "void *" id . cTypeOfMaybe
+
+-- | The C type a member renders as, when its family has one. 'Nothing'
+-- for boxed handles (arbitrary precision / dynamic / unwidthed / over-64
+-- fixed widths) — the C2 convention owns those as @void *@
+-- (emitting @__int128@ would bake in a GCC extension).
+cTypeOfMaybe :: Member -> Maybe Text
+cTypeOfMaybe m = case (mFamily m, mWidth m) of
+  (FBool, _) -> Just "_Bool"
+  (FText, _) -> Just "const char *"
+  (FUnit, _) -> Just "void"
   (FSigned, Just w) -> intC "int" w
   (FUnsigned, Just w) -> intC "uint" w
-  (FFloat, Just 32) -> "float"
-  (FFloat, Just 64) -> "double"
-  _ -> "void *"
+  (FFloat, Just 32) -> Just "float"
+  (FFloat, Just 64) -> Just "double"
+  _ -> Nothing
   where
     intC p w = case w of
-      8 -> p <> "8_t"
-      16 -> p <> "16_t"
-      32 -> p <> "32_t"
-      64 -> p <> "64_t"
-      _ -> "void *"
+      8 -> Just (p <> "8_t")
+      16 -> Just (p <> "16_t")
+      32 -> Just (p <> "32_t")
+      64 -> Just (p <> "64_t")
+      _ -> Nothing -- 128-bit etc: boxed handle, not a C extension type
+
+-- | The type the bridge glue uses at the /callee/ side of a position.
+-- Adapter-owned crossings (a C4 adapter was emitted) speak the wire's
+-- plain @int64_t@ ABI at every wire-representable position: the
+-- adapter — or the effect-map shim — is the component that projects
+-- that ABI onto the island's real ABI, so the glue never declares a
+-- type the symbol at that name lacks.
+--
+-- Why not 'cTypeOf': a 63-bit OCaml member or a bounded big falls
+-- through 'cTypeOf' to @void *@ while the adapter's entry is
+-- unconditionally @int64_t@ — glue typed @void *@ against an @int64_t@
+-- symbol links by x86-64 ABI luck, not by contract (the wart the FBig
+-- wire probe caught on the trampoline extern; the OCaml gold's
+-- callee.c carried the same latent mismatch).
+--
+-- Without an adapter the callee side is the ABI: glue keeps each
+-- member's own C type ('cTypeOf'), so a genuine mismatch is a visible
+-- compile error rather than a silently reinterpreted value. Members
+-- the wire cannot carry — unbounded bigs, 128-bit, text, floats —
+-- keep the boxed-handle / own-type convention even adapter-owned
+-- (C2 owns their representation).
+calleeTypeOf :: Bool -> Member -> Text
+calleeTypeOf adapterOwned m
+  | adapterOwned, wireNative m = "int64_t"
+  | otherwise = cTypeOf m
+
+-- | The type the caller-side bridge glue uses at a position: the
+-- caller's own representation when it has a C type; when the caller's
+-- member is wire-native but boxed at C level (a bounded big), the
+-- wire's int64 ABI — the license makes the value wire-representable,
+-- so the wrapper speaks the wire ABI rather than a handle.
+callerTypeOf :: Member -> Text
+callerTypeOf m = case cTypeOfMaybe m of
+  Just t -> t
+  Nothing
+    | wireNative m -> "int64_t"
+    | otherwise -> "void *"
+
+-- | Members the wire's plain int64 ABI carries without semantic
+-- reinterpretation: fixed-width integers up to 64 bits, bigs under
+-- a declared bound (the license guarantees sentinel headroom inside 64
+-- bits, and the generated checks enforce it), and dynamic members —
+-- the C4 convention explicitly routes dynamic values through the
+-- adapter with runtime checks ('licensed-with-runtime-checks'), which
+-- is itself a declaration that the wire's int64 carries them.
+-- Unbounded bigs, text, floats, and over-64 fixed widths are not the
+-- wire's int64.
+wireNative :: Member -> Bool
+wireNative m = case (mFamily m, mWidth m, mBound m) of
+  (FSigned, Just w, _) -> w <= 64
+  (FUnsigned, Just w, _) -> w <= 64
+  (FBigSigned, _, Just _) -> True
+  (FBigUnsigned, _, Just _) -> True
+  (FDynamic, _, _) -> True
+  _ -> False
+
+-- | The member as seen from the callee side of a position: arguments
+-- arrive callee-typed ('posTo'), the result leaves callee-typed
+-- ('posFrom') — the same side convention as 'signature' and the
+-- effect-map guard collection.
+calleeMember :: Position -> Member
+calleeMember p
+  | posLabel p == "result" = posFrom p
+  | otherwise = posTo p
 
 -- | C-ABI-safe identifier: every non-alphanumeric becomes @_@, always
 -- prefixed so a leading digit cannot happen.
@@ -232,13 +304,13 @@ mangleKokaModule = T.replace "_" "__"
 -- | The caller-side island wrapper. The callee is declared @extern@
 -- with the callee's ABI signature; each argument converts per its
 -- position note (casts for the scalar cases C1 licenses).
-callerLines :: StubRequest -> [(Position, (Text, [Text]))] -> [Text]
-callerLines req perPos =
+callerLines :: StubRequest -> [(Position, (Text, [Text]))] -> Bool -> [Text]
+callerLines req perPos adapterOwned =
   [ "// caller-side island wrapper for " <> srCaller req
   , "// crossing verdict: " <> verdictOf perPos
   , "#include <stdint.h>"
   ]
-    <> [signature req perPos True]
+    <> [signature req adapterOwned True]
     <> body
   where
     callee = safeIdent (srCallee req)
@@ -247,19 +319,19 @@ callerLines req perPos =
     result = [p | p <- srPositions req, posLabel p == "result"]
     argNames = ["a" <> T.pack (show i) | i <- [0 :: Int ..]]
     body =
-      [ "  extern " <> externRet <> " " <> callee <> "(" <> T.intercalate ", " [cTypeOf (posTo p) <> " " <> n | (p, n) <- zip args argNames] <> ");"
-      , "  return " <> retCast <> callee <> "(" <> T.intercalate ", " ["(" <> cTypeOf (posTo p) <> ") " <> n | (p, n) <- zip args argNames] <> ");"
+      [ "  extern " <> externRet <> " " <> callee <> "(" <> T.intercalate ", " [calleeTypeOf adapterOwned (posTo p) <> " " <> n | (p, n) <- zip args argNames] <> ");"
+      , "  return " <> retCast <> callee <> "(" <> T.intercalate ", " ["(" <> calleeTypeOf adapterOwned (posTo p) <> ") " <> n | (p, n) <- zip args argNames] <> ");"
       , "}"
       ]
     -- The extern declares the callee's ABI: callee result type (posFrom
     -- of the result position) and callee-typed parameters (posTo).
     externRet = case result of
-      (p : _) -> cTypeOf (posFrom p)
+      (p : _) -> calleeTypeOf adapterOwned (posFrom p)
       [] -> "void"
     -- The wrapper returns the caller's type (posTo of the result);
     -- the extern call's value arrives in the callee's type.
     retCast = case result of
-      (p : _) -> "(" <> cTypeOf (posTo p) <> ") "
+      (p : _) -> "(" <> callerTypeOf (posTo p) <> ") "
       [] -> ""
 
 verdictOf :: [(Position, (Text, [Text]))] -> Text
@@ -273,13 +345,13 @@ verdictOf perPos = case aggregate [v | (_, (v, _)) <- perPos] of
 -- forwarding plus the GHC RTS contract when the island is Haskell.
 -- When unknown, the body stays an explicit C2 placeholder: never
 -- invent an entry point.
-calleeLines :: StubRequest -> [(Position, (Text, [Text]))] -> [Text]
-calleeLines req perPos =
+calleeLines :: StubRequest -> [(Position, (Text, [Text]))] -> Bool -> [Text]
+calleeLines req perPos adapterOwned =
   [ "// callee-side island wrapper for " <> srCallee req
   , "// crossing verdict: " <> verdictOf perPos
   , "#include <stdint.h>"
   ]
-    <> [signature req perPos False]
+    <> [signature req adapterOwned False]
     <> body
   where
     args = [p | p@Position {} <- srPositions req, isArg p]
@@ -292,7 +364,7 @@ calleeLines req perPos =
     -- are a namespace of their own — never prefix an island export).
     safeIdentExport t = T.map (\c -> if isAlphaNum c then c else '_') t
     retCast = case result of
-      (p : _) -> "(" <> cTypeOf (posFrom p) <> ") "
+      (p : _) -> "(" <> calleeTypeOf adapterOwned (posFrom p) <> ") "
       [] -> ""
     callLine e =
       "  return " <> retCast <> e <> "(" <> T.intercalate ", " argNames <> ");"
@@ -301,7 +373,7 @@ calleeLines req perPos =
                  , "  /*    provide the island's real entry point to fill this */"
                  , "}" ]
       Just e ->
-        [ "  extern " <> islandRet <> " " <> e <> "(" <> T.intercalate ", " [cTypeOf (posTo p) <> " " <> n | (p, n) <- zip args argNames] <> ");"
+        [ "  extern " <> islandRet <> " " <> e <> "(" <> T.intercalate ", " [calleeTypeOf adapterOwned (posTo p) <> " " <> n | (p, n) <- zip args argNames] <> ");"
         , "  /* trampoline: forward to the island's entry " <> e <> " */"
         , callLine e
         , "}"
@@ -310,7 +382,7 @@ calleeLines req perPos =
           -- The island entry has the callee's ABI: callee-typed params
           -- and the callee's result type (posFrom of the result).
           islandRet = case result of
-            (p : _) -> cTypeOf (posFrom p)
+            (p : _) -> calleeTypeOf adapterOwned (posFrom p)
             [] -> "void"
           <> concat
             [ [ "/* GHC islands: the host must call hs_init before the first crossing and"
@@ -338,7 +410,16 @@ calleeLines req perPos =
 -- runtime, not of the scalar positions (koka's @kk_integer_t@ +
 -- @kk_context_t*@, GHC's @StgInt@ via its own generated capi header).
 emitAdapter :: StubRequest -> Maybe [Text]
-emitAdapter req = case (calleeLang, srCalleeExport req, srCalleeAdapter req) of
+emitAdapter req
+  -- Fail closed when a callee-side position is not wire-native: the
+  -- adapter's entry is unconditionally the wire's @int64_t@ ABI, so a
+  -- crossing whose values it cannot carry (unbounded bigs, dynamic,
+  -- 128-bit, text, floats) must get NO adapter — emitting one would
+  -- leave glue typed @void *@ against an @int64_t@ symbol, linked by
+  -- ABI luck. The boxed-handle glue convention (C2) is the honest
+  -- output for those domains.
+  | not (all (wireNative . calleeMember) (srPositions req)) = Nothing
+  | otherwise = case (calleeLang, srCalleeExport req, srCalleeAdapter req) of
   ("koka", Just entry, Just _) ->
     Just $
       [ "// ABI adapter: koka island (generated, C4)"
@@ -543,11 +624,48 @@ emitAdapter req = case (calleeLang, srCalleeExport req, srCalleeAdapter req) of
 -- and a host observes the sentinel for an out-of-bound arg AND an
 -- out-of-bound result while in-range calls return real values.
 --
+-- The checked shim's structure is pinned by example so emitter
+-- refactors cannot silently change its shape: nested check functions,
+-- the strict-inequality corners, the call consuming its pre-checked
+-- argument exactly once, the result check wrapping the call, and the
+-- sentinel mapping.
+--
+-- >>> import IntelliMonad.Tools.OrganBank.Dictionary
+-- >>> import qualified Data.Text as T
+-- >>> import Data.Maybe (fromMaybe)
+-- >>> :{
+-- let big b = Member FBigSigned Nothing (Just b) "koka std/core/integer/bounded"
+--     req = StubRequest
+--       "koka:factorial_big/big-factorial"
+--       "koka:factorial_big_bounded/big-bounded-factorial"
+--       [ Position "arg 0" (big 60) (big 60)
+--       , Position "result" (big 60) (big 60)
+--       ]
+--       ["std/core/div"] ["std/core/div", "std/core/exn"]
+--       (Just "kk_big_island") (Just "kk_big_island") True
+--     shim = T.unlines (fromMaybe [] (spEffectMap (planBoundary req)))
+-- in and
+--      [ T.isInfixOf "fun bcheck_arg_0(x : int) : <exn> int" shim
+--      , T.isInfixOf "fun bcheck_result(x : int) : <exn> int" shim
+--      , T.isInfixOf "if (x >= 1152921504606846976 || x <= 0 - 1152921504606846976)" shim
+--      , T.isInfixOf "val a0 = bcheck_arg_0(int(n))" shim
+--      , T.isInfixOf "val r0 = big-bounded-factorial(a0)" shim
+--      , T.isInfixOf "std/num/int64/int64(bcheck_result(r0))" shim
+--      , T.isInfixOf "fn(exn) min-int64" shim
+--      ]
+-- :}
+-- True
+--
 -- Fail-closed: no request, a non-koka callee, or a callee whose real
 -- export is unknown yields Nothing — the generator never invents a
 -- mapping for a language whose exception ABI it cannot emit.
 emitEffectMap :: StubRequest -> Maybe [Text]
 emitEffectMap req
+  -- Same fail-closed rule as 'emitAdapter': the mapped entry is
+  -- unconditionally the wire's int64 ABI, so a non-wire-native
+  -- callee-side position gets no shim (glue would be typed void * against an
+  -- int64_t symbol).
+  | not (all (wireNative . calleeMember) (srPositions req)) = Nothing
   | srEffectMap req, calleeLang == "koka", Just _ <- srCalleeExport req =
       Just $
         [ "// C3 effect map: koka-side shim (generator-emitted)." 
@@ -649,15 +767,15 @@ emitEffectMap req
 -- type (posTo of the result position); the callee side defines the
 -- ABI: callee-typed parameters (posTo) and the callee's result type
 -- (posFrom). The two sides differ exactly where the crossing does.
-signature :: StubRequest -> [(Position, (Text, [Text]))] -> Bool -> Text
-signature req perPos isCaller =
+signature :: StubRequest -> Bool -> Bool -> Text
+signature req adapterOwned isCaller =
   let args = [p | p@Position {} <- srPositions req, posLabel p /= "result"]
       result = [p | p <- srPositions req, posLabel p == "result"]
       argNames = ["a" <> T.pack (show i) | i <- [0 :: Int ..]]
       retType = case result of
-        (p : _) -> cTypeOf (if isCaller then posTo p else posFrom p)
+        (p : _) -> if isCaller then callerTypeOf (posTo p) else calleeTypeOf adapterOwned (posFrom p)
         [] -> "void"
-      paramType p = cTypeOf (if isCaller then posFrom p else posTo p)
+      paramType p = if isCaller then callerTypeOf (posFrom p) else calleeTypeOf adapterOwned (posTo p)
       params = T.intercalate ", " [paramType p <> " " <> n | (p, n) <- zip args argNames]
    in retType <> " " <> safeIdent (if isCaller then srCaller req else srCallee req) <> "(" <> params <> ") {"
 

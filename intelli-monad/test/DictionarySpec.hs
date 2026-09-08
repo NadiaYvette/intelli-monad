@@ -198,6 +198,16 @@ spec = do
         v1 `shouldBe` "licensed-bounded"
         v2 `shouldBe` "unlicensed-bound-headroom"
 
+    it "licenses a WIDTHLESS bounded big into fixed width (the C5 FBig carrier convention)" $
+      -- The koka std/core/integer/bounded60 member has mWidth =
+      -- Nothing: a widthless big side declares its range by the bound
+      -- alone, the wire's int64 ABI is its carrier, so headroom is
+      -- asked against the fixed side only. Demanding a width the
+      -- convention does not give would refuse the FBig demo's result
+      -- direction (bounded-big callee -> std/i64 caller).
+      let (v, _) = licenseBig (Member FBigSigned Nothing (Just 60) "koka std/core/integer/bounded60") (fix 64 Nothing "w")
+      in v `shouldBe` "licensed-bounded"
+
   describe "boundaryReport dictionary integration (direction-aware)" $ do
     let args = OrganCheckBoundary "Factorial" "factorial" (Just "c") "factorial_rs" "factorial" (Just "rust")
     it "licenses c int32 -> rust i64 args but refuses the narrowing return" $ do

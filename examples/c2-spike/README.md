@@ -220,9 +220,12 @@ Link contract (ABI-proven, organ-bank `doc/abi-notes/ocaml.md` §4):
 archive member, the OCaml-side counterpart of `ghc -no-hs-main`.
 Manual gcc linking against `libasmrun.a` fails: `caml_globals`/
 `caml_frametable` live in ocamlopt's generated startup object, which
-is deleted even on success. That constraint is why the OCaml gold is
-a C-host + OCaml + rust process rather than a fourth island inside
-`run_multi.sh` (see the honest note in `doc/phase-c-transplant.md`).
+is deleted even on success. **Superseded 2026-09-08**: `ocamlopt
+-dstartup` writes that startup code out as assembly
+(`*.startup.s`, with the full `caml_program` initializer chain and
+frametable); assemble it with gcc and the OCaml RTS joins any
+externally-driven link. That is the technique `run_quad.sh` uses to
+run four runtimes in one process.
 
 ## Effect map (C5 follow-up, 2026-09-08)
 
@@ -233,3 +236,28 @@ adapter maps them to the wire's status sentinel — the same contract
 koka's `handle/try` shim honors. `run_ocaml.sh` proves it live: the
 spike island raises `Invalid_argument` for inputs above 25, the
 sentinel fires, and the RTS stays usable (the next call computes `5!`).
+
+## Quad gold (C2+C4+C5 at full scale, 2026-09-08)
+
+`run_quad.sh`: ONE process, four runtimes — C host, GHC RTS, kklib,
+OCaml RTS (+ runtime-free rust islands). `drive_quad_wire.py` plans
+three crossings through the real `mcp-serve` binary (rust→koka,
+rust→ocaml, rust→haskell); every island-facing artifact is
+wire-generated. The host drives ten contract paths with exact values:
+wire glue through all three islands, direct adapter entries, the OCaml
+exception sentinel firing mid-process, and all three RTSes still
+serving real calls afterwards. The link is ghc-driven (`-no-hs-main`)
+plus `libasmrun` + the `-dstartup`-emitted startup object — probed
+first with `ghc -v`: ghc's own link line resolves everything except
+the `caml_*` runtime symbols.
+
+## FBig gold (C5, 2026-09-08)
+
+`run_big.sh`: the arbitrary-precision bounded contract live. The
+`--big` driver mode swaps only the OrganIR qnames
+(`std/core/integer/bounded60`) — the same compiled islands — so the
+license takes the big-big gate and the bridge glue is typed to the
+wire ABI by contract (`wireNative`), while the guards run in koka's
+exact big-int arithmetic. 20! exceeds both the bound and int64; the
+sentinel fires because the check runs before any truncation could
+exist.

@@ -372,3 +372,75 @@ spec = do
       adapter `shouldContain` "n >= 2305843009213693952 || n <= 0 - 2305843009213693952" -- 2^61
       adapter `shouldNotContain` "n < 2305843009213693952"
       adapter `shouldNotContain` "n > 0 - 2305843009213693952"
+
+  describe "C5b: wire-ABI type agreement across the generated glue" $ do
+    -- The C4 export contract: srCalleeExport names the ABI adapter's
+    -- int64_t entry, so EVERY piece of callee-side glue that names that
+    -- symbol must type it int64_t — including for bounded-big members,
+    -- which have no natural C type (the old cTypeOf rendered them
+    -- void *, and the trampoline extern linked against the adapter's
+    -- int64_t entry by x86-64 ABI luck, not contract).
+    it "types the bounded-big trampoline extern as the wire int64_t, not void *" $ do
+      let big b = Member FBigSigned Nothing (Just b) "koka std/core/integer/bounded"
+          req = StubRequest
+            "koka:factorial_big/big-factorial"
+            "koka:factorial_big_bounded/big-bounded-factorial"
+            [ Position "arg 0" (big 60) (big 60)
+            , Position "result" (big 60) (big 60)
+            ]
+            ["std/core/div"] ["std/core/div", "std/core/exn"]
+            (Just "kk_big_island") (Just "kk_big_island") True
+          callee = T.unpack (T.unlines (spCalleeSide (planBoundary req)))
+      callee `shouldContain` "int64_t omni_koka_factorial_big_bounded_big_bounded_factorial(int64_t a0)"
+      callee `shouldContain` "extern int64_t kk_big_island(int64_t a0)"
+      callee `shouldNotContain` "void *"
+    it "types bounded-big caller-side wrapper members as the wire int64_t too" $ do
+      -- Mirror direction: a bounded-big caller has no C type for its
+      -- own member, but the license makes the value wire-representable.
+      let big b = Member FBigSigned Nothing (Just b) "koka std/core/integer/bounded"
+          req = StubRequest
+            "koka:factorial_big/big-factorial"
+            "koka:factorial_big_bounded/big-bounded-factorial"
+            [ Position "arg 0" (big 60) (big 60)
+            , Position "result" (big 60) (big 60)
+            ]
+            ["std/core/div"] ["std/core/div", "std/core/exn"]
+            (Just "kk_big_island") (Just "kk_big_island") True
+          caller = T.unpack (T.unlines (spCallerSide (planBoundary req)))
+      caller `shouldContain` "int64_t omni_koka_factorial_big_big_factorial(int64_t a0)"
+      caller `shouldNotContain` "void *"
+    it "refuses to emit an adapter for a non-wire-native callee side (fail closed)" $ do
+      -- An unbounded big cannot ride the wire's int64 ABI; an adapter
+      -- whose entry is unconditionally int64_t would be glue-typed
+      -- void * against it — exactly the luck-based link the C4
+      -- contract forbids. The trigger is a CALLEE-side member: here
+      -- the callee takes an unbounded-big argument (posTo), so no
+      -- adapter and no effect map — the boxed-handle glue convention
+      -- (C2) is the honest output for genuinely big values.
+      let bigU = Member FBigSigned Nothing Nothing "koka std/core/integer"
+          bigB = Member FBigSigned Nothing (Just 60) "koka std/core/integer/bounded60"
+          req = StubRequest
+            "koka:factorial_big/big-factorial"
+            "koka:factorial_big_bounded/big-bounded-factorial"
+            [ Position "arg 0" bigB bigU
+            , Position "result" bigU bigB
+            ]
+            [] [] (Just "kk_big_island") (Just "kk_big_island") True
+          plan = planBoundary req
+      spAdapter plan `shouldBe` Nothing
+      spEffectMap plan `shouldBe` Nothing
+    it "keeps the OCaml bounded adapter glue uniformly int64_t (no void * luck)" $ do
+      -- The OCaml gold's callee.c carried the same latent mismatch
+      -- (63-bit member -> void * against an int64_t adapter entry).
+      let i64 = Member FSigned (Just 64) Nothing "std/i64"
+          ocB = Member FSigned (Just 63) (Just 61) "Stdlib/int/bounded61"
+          req = StubRequest
+            "rust:factorial_rs/factorial"
+            "ocaml:factorial_oc/island-factorial"
+            [ Position "arg 0" i64 ocB
+            , Position "result" ocB i64
+            ]
+            [] [] (Just "ocaml_island_factorial") (Just "ocaml_island_factorial") False
+          callee = T.unpack (T.unlines (spCalleeSide (planBoundary req)))
+      callee `shouldContain` "extern int64_t ocaml_island_factorial(int64_t a0)"
+      callee `shouldNotContain` "void *"
