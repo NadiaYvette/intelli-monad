@@ -21,6 +21,7 @@ module IntelliMonad.Tools.OrganBank.Dictionary
   , Member (..)
   , memberOf
   , axiomLine
+  , weakestEvidence
   , license
   , licenseBig
   , licenseBigIn
@@ -80,6 +81,24 @@ data Evidence
     -- names, @\/any@): true because both sides signed it.
     EConventional
   deriving (Eq, Show)
+
+-- | The weaker of two evidence classes: the floor a crossing's trust
+-- stands on. A verdict can only be as well-known as its weakest cited
+-- axiom — frankenstein's lowering reads this off the citation list
+-- instead of re-deriving it from the per-entry tags.
+--
+-- >>> weakestEvidence ESpec EProbed
+-- EProbed
+-- >>> weakestEvidence EConventional EPracticed
+-- EConventional
+weakestEvidence :: Evidence -> Evidence -> Evidence
+weakestEvidence a b = if evidenceRank a <= evidenceRank b then a else b
+  where
+    evidenceRank e = case e of
+      ESpec -> 3 :: Int
+      EPracticed -> 2
+      EProbed -> 1
+      EConventional -> 0
 
 -- | One dictionary entry: a family, a bit width where that question
 -- even makes sense, an optional /declared bound/ for the
@@ -306,8 +325,22 @@ memberOf lang mdl nm
 -- >>> fst (license bigB bigU)
 -- "licensed-lossless"
 license :: Member -> Member -> (Text, [Text])
-license a b = boundGate baseCase
+license a b = citeEvidence (boundGate baseCase)
   where
+    -- Every verdict carries its evidence floor: the weaker of the two
+    -- cited axioms' provenance. The per-entry tags ride the axiom
+    -- lines; this line is the summary a consumer can key on without
+    -- parsing them.
+    citeEvidence (v, axs) =
+      ( v,
+        axs
+          ++ [ T.pack
+                 ( "evidence floor: "
+                     <> show (weakestEvidence (mEvidence a) (mEvidence b))
+                     <> " — the weaker of the cited axioms' provenance; the crossing's trust is bounded by it"
+                 )
+             ]
+      )
     isInt f = f == FSigned || f == FUnsigned
     isBig f = f == FBigSigned || f == FBigUnsigned
     lossless = ("licensed-lossless", [axiomLine a, axiomLine b, "same family, no range question"])

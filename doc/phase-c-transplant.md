@@ -540,3 +540,44 @@ canonical core names are EConventional (agreement, not fact); spec-
 and practice-backed widths are ESpec/EPracticed. The spike index
 table in `examples/c2-spike/README.md` maps every script to the
 evidence it earns.
+
+## C3's open stub note closed: the effect-surfacing declaration, and evidence-weighted citations (2026-09-08)
+
+### The declaration, machine-readable
+
+The C3 milestone text demanded the stub "declare how the effects
+surface (exceptions, error codes, or explicit capability passing)".
+The generated effect map satisfied the exception branch, but the
+declaration itself was prose in the emitted shim. The plan output now
+carries it as data: `opsoEffectConvention` ∈
+
+- `"sentinel"` — the effect map is in this plan; the wire's status
+  sentinel carries the island's exceptions (the exceptions branch,
+  generated);
+- `"pure"` — the callee's normalized row is empty; nothing surfaces;
+- `"unchecked"` — a licensed crossing with effects whose surfacing
+  was NOT requested or generatable: an explicit non-declaration, so a
+  caller can never assume a convention the plan did not make;
+- `""` — refusal; there is no call, so no convention (the refusal is
+  the answer).
+
+The error-code and capability-passing branches remain future
+emitters; the field is the surface they will declare through. The
+derivation normalizes the callee row exactly as the subset rule does
+(`std/pure` is the empty row — the same function, not a re-derivation).
+Pinned over the wire for all four values in OrganSpec.
+
+### The evidence floor on every verdict
+
+`license` (and the big gates behind it) now append a citation line
+`evidence floor: <Evidence>` — the weaker of the two cited axioms'
+provenance (`weakestEvidence` takes the minimum of the rank order
+ESpec > EPracticed > EProbed > EConventional). A verdict can only be
+as well-known as its weakest axiom; frankenstein's lowering reads the
+floor off the citation list instead of re-deriving it from the
+per-entry tags. Refusals carry their floor too — the refusal is as
+strong as its evidence. Pinned in DictionarySpec (both floors, the
+refusal case, the ordering).
+
+Verification: 226 hspec examples + 108 doctests green; `run.sh` and
+`run_quad.sh` re-pass with the new output field on the wire.

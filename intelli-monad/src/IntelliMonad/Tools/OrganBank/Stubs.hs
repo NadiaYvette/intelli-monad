@@ -38,6 +38,7 @@ module IntelliMonad.Tools.OrganBank.Stubs
   , StubPlan (..)
   , planBoundary
   , renderCStubs
+  , normalizeRow
   , safeIdent
   , fixtureHaskellRust
   , fixtureCWidened

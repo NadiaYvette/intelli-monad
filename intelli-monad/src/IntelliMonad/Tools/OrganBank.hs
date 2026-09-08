@@ -926,9 +926,18 @@ data OrganPlanStubOutput = OrganPlanStubOutput
     opsoStubs :: [Text],
     -- ^ C4: the ABI-adapter section when requested (empty otherwise).
     opsoAdapter :: [Text],
-    opsoEffectMap :: [Text]
+    opsoEffectMap :: [Text],
     -- ^ C3: the island-side effect-map source when requested and
     -- generatable (empty otherwise).
+    opsoEffectConvention :: Text
+    -- ^ C3's open stub note, closed: HOW the callee's effects surface
+    -- to the caller, as machine-readable data. "sentinel" = the
+    -- generated effect map is in this plan (the wire's status sentinel
+    -- carries the island's exceptions); "pure" = the callee's row is
+    -- empty, nothing surfaces; "unchecked" = a licensed crossing with
+    -- effects whose surfacing was NOT requested/generated — the caller
+    -- receives no declaration and must not assume one; "" = refusal
+    -- (there is no call, so no convention — the refusal is the answer).
   }
   deriving (Eq, Show, Generic, A.FromJSON, A.ToJSON)
 
@@ -949,7 +958,7 @@ instance Tool OrganPlanStub where
       return ((,) <$> a <*> b)
     return $ OrganPlanStubOut $ case mside of
       Left problem ->
-        OrganPlanStubOutput "unlicensed-resolve" "" "" ["// STUB REFUSED: unlicensed-resolve", "//   " <> problem] [] []
+        OrganPlanStubOutput "unlicensed-resolve" "" "" ["// STUB REFUSED: unlicensed-resolve", "//   " <> problem] [] [] ""
       Right ((ta, _ha, la), (tb, _hb, lb)) ->
         case (fnOf ta, fnOf tb) of
           (Just fa, Just fb) ->
@@ -983,7 +992,7 @@ instance Tool OrganPlanStub where
                     S.srEffectMap = args.opsEffectMap
                   }
              in case S.planBoundary req of
-                  S.StubRefused v reasons -> OrganPlanStubOutput v "" "" (S.renderCStubs (S.StubRefused v reasons)) [] []
+                  S.StubRefused v reasons -> OrganPlanStubOutput v "" "" (S.renderCStubs (S.StubRefused v reasons)) [] [] ""
                   plan@S.StubPlan {} ->
                     OrganPlanStubOutput
                       (S.spVerdict plan)
@@ -992,8 +1001,15 @@ instance Tool OrganPlanStub where
                       (S.renderCStubs plan)
                       (fromMaybe [] (S.spAdapter plan))
                       (fromMaybe [] (S.spEffectMap plan))
+                      -- C3's declaration, machine-readable: what the
+                      -- caller can assume about how effects surface.
+                      ( case (S.spEffectMap plan, S.normalizeRow (S.srCalleeEffects req)) of
+                          (Just _, _) -> "sentinel"
+                          (Nothing, []) -> "pure"
+                          (Nothing, _) -> "unchecked"
+                      )
           _ ->
-            OrganPlanStubOutput "unlicensed-shape" "" "" ["// STUB REFUSED: unlicensed-shape", "//   one side is not a function type; there is no call to glue"] [] []
+            OrganPlanStubOutput "unlicensed-shape" "" "" ["// STUB REFUSED: unlicensed-shape", "//   one side is not a function type; there is no call to glue"] [] [] ""
     where
       fetchOne conn m n mlang = do
         let sql = case mlang of

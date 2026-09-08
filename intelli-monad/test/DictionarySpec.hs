@@ -26,6 +26,7 @@ import IntelliMonad.Tools.OrganBank.Dictionary
     license,
     licenseBig,
     memberOf,
+    weakestEvidence,
   )
 
 spec :: Spec
@@ -59,7 +60,7 @@ spec = do
     let m f w note = Member f w Nothing ESpec note
     it "licenses equal-width same-family crossings as lossless" $
       license (m FSigned (Just 32) "a") (m FSigned (Just 32) "b") `shouldBe`
-        ("licensed-lossless", ["axiom: signed-int (32 bits) [ESpec] — a", "axiom: signed-int (32 bits) [ESpec] — b", "same family, no range question"])
+        ("licensed-lossless", ["axiom: signed-int (32 bits) [ESpec] — a", "axiom: signed-int (32 bits) [ESpec] — b", "same family, no range question", "evidence floor: ESpec — the weaker of the cited axioms' provenance; the crossing's trust is bounded by it"])
 
     it "licenses same-family same-width regardless of the note text" $ do
       let (v, _) = license (Member FSigned (Just 64) Nothing ESpec "x") (Member FSigned (Just 64) Nothing ESpec "y")
@@ -261,6 +262,40 @@ spec = do
           m2 = fnMod "std" "int" "int"
           rep = boundaryReport args (Just "mercury") m1 (typeHeadline m1) (Just "mercury") m2 (typeHeadline m2)
       brVerdict rep `shouldBe` "identical"
+  describe "evidence-weighted citations" $ do
+    it "every verdict carries its evidence floor" $
+      let (_, axs) =
+            license (Member FSigned (Just 32) Nothing ESpec "a") (Member FSigned (Just 32) Nothing ESpec "b")
+       in any ("evidence floor: ESpec" `T.isInfixOf`) axs `shouldBe` True
+
+    it "the floor is the weaker of the two axioms" $
+      let (_, axs) =
+            license
+              (Member FSigned (Just 32) Nothing EPracticed "ghc-prim/Int#")
+              (Member FSigned (Just 32) Nothing ESpec "std/int32")
+       in any ("evidence floor: EPracticed" `T.isInfixOf`) axs `shouldBe` True
+
+    it "a probed floor lowers the crossing's trust even when both verdicts license" $
+      let (_, axs) =
+            license
+              (Member FSigned (Just 64) Nothing EProbed "koka std/core/int")
+              (Member FSigned (Just 64) Nothing ESpec "rust std/i64")
+       in any ("evidence floor: EProbed" `T.isInfixOf`) axs `shouldBe` True
+
+    it "refusals carry their floor too (the refusal is as strong as its evidence)" $ do
+      let (v, axs) =
+            license
+              (Member FBigSigned Nothing Nothing EProbed "koka integer")
+              (Member FBigUnsigned Nothing Nothing ESpec "Lean Nat")
+      v `shouldBe` "unlicensed-overflow-domain"
+      any ("evidence floor: EProbed" `T.isInfixOf`) axs `shouldBe` True
+
+    it "weakestEvidence orders the classes" $ do
+      weakestEvidence ESpec EPracticed `shouldBe` EPracticed
+      weakestEvidence EPracticed EProbed `shouldBe` EProbed
+      weakestEvidence EProbed EConventional `shouldBe` EConventional
+      weakestEvidence ESpec ESpec `shouldBe` ESpec
+
   describe "evidence tags" $ do
     it "renders the evidence class on the axiom citation line" $
       axiomLine (Member FSigned (Just 32) Nothing EProbed "probe-backed")

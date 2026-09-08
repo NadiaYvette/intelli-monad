@@ -752,6 +752,49 @@ spec = do
         emapTxt `shouldContain` "min-int64"
         opsoVerdict out `shouldNotBe` "licensed-lossless"
 
+    -- C3's open stub note, closed: the plan declares HOW effects
+    -- surface, as machine-readable data on the wire.
+    it "declares the sentinel convention when the effect map is emitted" $
+      withFreshIndex $ \tmp -> do
+        idx <- defaultOrganIndex
+        _ <- ingestPath idx tmp
+        r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_pure" "factorial" (Just "rust") "factorial" "island-factorial" (Just "koka") (Just "kk_island_factorial") (Just "kk_island_factorial") True)
+        let out = organPlanStubOutput r
+        opsoVerdict out `shouldBe` "licensed-with-runtime-checks"
+        opsoEffectMap out `shouldNotBe` []
+        opsoEffectConvention out `shouldBe` "sentinel"
+
+    it "declares the pure convention for an empty callee row" $
+      withFreshIndex $ \tmp -> do
+        idx <- defaultOrganIndex
+        _ <- ingestPath idx tmp
+        r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_pure" "factorial" (Just "rust") "FacPure" "factorial" (Just "haskell") (Just "hs_island_factorial") (Just "hs_island_factorial") False)
+        let out = organPlanStubOutput r
+        opsoEffectConvention out `shouldBe` "pure"
+
+    it "declares unchecked when effects are licensed but not declared" $
+      withFreshIndex $ \tmp -> do
+        idx <- defaultOrganIndex
+        _ <- ingestPath idx tmp
+        r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_pure" "factorial" (Just "rust") "factorial" "island-factorial" (Just "koka") (Just "kk_island_factorial") (Just "kk_island_factorial") False)
+        let out = organPlanStubOutput r
+        -- The crossing licenses (caller ⊆ callee), but no surfacing was
+        -- requested: the caller gets an explicit non-declaration.
+        opsoEffectConvention out `shouldBe` "unchecked"
+
+    it "leaves the convention empty on refusals (there is no call)" $
+      withOcamlIndex $ \tmp -> do
+        idx <- defaultOrganIndex
+        _ <- ingestPath idx tmp
+        r <- runPrompt @StatelessConf [] [] "organ-test" defaultRequest $
+          toolExec @OrganPlanStub @StatelessConf (OrganPlanStub "factorial_oc" "factorial" (Just "ocaml") "factorial_rs" "factorial" (Just "rust") Nothing Nothing False)
+        let out = organPlanStubOutput r
+        opsoVerdict out `shouldBe` "unlicensed-narrowing"
+        opsoEffectConvention out `shouldBe` ""
+
   where
     sameArgs ta tb =
       boundaryReport (OrganCheckBoundary "Factorial" "factorial" (Just "haskell") "factorial_rs" "factorial" (Just "rust")) (Just "haskell") ta (typeHeadline ta) (Just "rust") tb (typeHeadline tb)
