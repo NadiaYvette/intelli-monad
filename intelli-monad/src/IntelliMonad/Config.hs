@@ -8,6 +8,7 @@ import Data.Yaml
 import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics (Generic)
+import System.Directory (XdgDirectory (..), getXdgDirectory)
 
 -- | Backend type: openai, anthropic, or gemini
 data BackendType = OpenAI | Anthropic | Gemini
@@ -43,7 +44,8 @@ getUseStreaming cfg = case useStreaming cfg of
 
 readConfig :: IO Config
 readConfig = do
-  config <- decodeFileEither "intellimonad-config.yaml"
+  pathToConfig <- getXdgDirectory XdgConfig "intellimonad-config.yaml"
+  config <- decodeFileEither pathToConfig
   case config of
     Left err -> error $ "Error reading config file: " ++ show err
     Right cfg -> return cfg
